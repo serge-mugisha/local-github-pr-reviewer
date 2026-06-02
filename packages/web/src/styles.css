@@ -5,6 +5,7 @@
 
 :root,
 [data-theme="dark"] {
+  color-scheme: dark;
   --bg: #000000;
   --bg-elev: #0a0a0a;
   --bg-elev2: #141414;
@@ -53,6 +54,7 @@
 }
 
 [data-theme="light"] {
+  color-scheme: light;
   --bg: #ffffff;
   --bg-elev: #fafafa;
   --bg-elev2: #f2f2f2;
@@ -757,8 +759,7 @@ pre {
   min-width: 0;
   font-size: 12.5px;
 }
-.pierre-diff [data-diffs-file-header],
-.pierre-diff .diffs-file-header {
+.pierre-diff [data-diffs-header] {
   background: linear-gradient(180deg, var(--bg-elev2), var(--bg-elev));
   border-bottom: 1px solid var(--border);
   font-family: "Geist Mono", monospace;
@@ -1245,15 +1246,20 @@ a:focus-visible {
 /* ── PR view layout: sidenav + main pane ───────────────────────────────── */
 .pr-body-grid {
   display: grid;
-  grid-template-columns: 260px minmax(0, 1fr);
+  grid-template-columns: 300px minmax(0, 1fr);
   gap: 20px;
   align-items: start;
+  transition: grid-template-columns 0.18s ease;
+}
+.pr-body-grid.sidenav-closed {
+  grid-template-columns: 28px minmax(0, 1fr);
 }
 .pr-main {
   min-width: 0;
 }
 @media (max-width: 900px) {
-  .pr-body-grid {
+  .pr-body-grid,
+  .pr-body-grid.sidenav-closed {
     grid-template-columns: 1fr;
   }
   .pr-sidenav {
@@ -1270,6 +1276,30 @@ a:focus-visible {
   border-radius: var(--r-lg);
   background: var(--bg-elev);
 }
+.pr-body-grid.sidenav-closed .pr-sidenav {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  overflow: visible;
+}
+.sidenav-stub {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 36px;
+  border: 1px solid var(--border);
+  background: var(--bg-elev);
+  color: var(--text-dim);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  font: inherit;
+  font-size: 16px;
+}
+.sidenav-stub:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
 .sidenav-inner {
   padding: 10px 8px;
 }
@@ -1280,6 +1310,27 @@ a:focus-visible {
   padding: 4px 6px 8px;
   border-bottom: 1px solid var(--border-soft);
   margin-bottom: 6px;
+}
+.sidenav-title-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.sidenav-collapse {
+  margin-left: auto;
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: var(--r-xs);
+}
+.sidenav-collapse:hover {
+  color: var(--text);
+  background: var(--bg-hover);
 }
 .sidenav-header h3 {
   margin: 0;
@@ -1381,22 +1432,16 @@ a:focus-visible {
   border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
 }
 
-/* ── Sticky per-file header (replaces Pierre's internal one) ───────────── */
-.diff .file-block.collapsed {
-  /* keep the header visible but hide the diff body */
-}
-.diff .file-block .file-header.sticky {
-  position: sticky;
-  top: 124px;
-  z-index: 10;
-  display: flex;
+/* ── Per-file controls injected into Pierre's header ───────────────────── */
+.file-header-prefix {
+  display: inline-flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 12px;
-  background: linear-gradient(180deg, var(--bg-elev2), var(--bg-elev));
-  border-bottom: 1px solid var(--border);
-  font-family: "Geist Mono", monospace;
-  font-size: 12.5px;
+}
+.file-header-metadata {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
 }
 .file-fold {
   appearance: none;
@@ -1406,6 +1451,7 @@ a:focus-visible {
   padding: 2px;
   border-radius: var(--r-xs);
   cursor: pointer;
+  line-height: 1;
 }
 .file-fold:hover {
   color: var(--text);
@@ -1420,16 +1466,8 @@ a:focus-visible {
 .chevron.down {
   transform: rotate(0);
 }
-.file-path {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--text);
-}
-.file-block.viewed .file-path {
-  color: var(--text-faint);
+.file-block.viewed .pierre-diff [data-diffs-header] {
+  opacity: 0.78;
 }
 .viewed-toggle {
   display: inline-flex;
@@ -1447,15 +1485,6 @@ a:focus-visible {
 }
 .file-block.viewed .viewed-toggle {
   color: var(--ok);
-}
-.file-body {
-  min-width: 0;
-}
-
-/* Push Pierre's own header out of the way; ours replaces it. */
-.pierre-diff [data-diffs-file-header],
-.pierre-diff .diffs-file-header {
-  display: none;
 }
 
 /* ── No-issues banner ──────────────────────────────────────────────────── */
@@ -1486,10 +1515,10 @@ a:focus-visible {
   position: relative;
 }
 .pr-body.collapsible.closed .pr-body-content {
-  max-height: 6em;
+  max-height: 12em;
   overflow: hidden;
-  mask-image: linear-gradient(to bottom, black 60%, transparent 100%);
-  -webkit-mask-image: linear-gradient(to bottom, black 60%, transparent 100%);
+  mask-image: linear-gradient(to bottom, black 70%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, black 70%, transparent 100%);
 }
 .pr-body-toggle {
   appearance: none;
@@ -1530,6 +1559,143 @@ a:focus-visible {
     border-color 0.15s ease;
 }
 .comment-copy:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+
+/* ── Review run: button spinner + status banners ───────────────────────── */
+.review-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.review-btn.is-running {
+  opacity: 0.85;
+}
+.btn-spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, currentColor 25%, transparent);
+  border-top-color: currentColor;
+  animation: spin 0.7s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.review-progress {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  margin-bottom: 16px;
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border));
+  background: color-mix(in srgb, var(--accent) 6%, var(--bg-elev));
+  border-radius: var(--r-lg);
+}
+.review-progress .pulse {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 60%, transparent);
+  animation: pulse 1.4s ease-out infinite;
+}
+@keyframes pulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 60%, transparent);
+  }
+  70% {
+    box-shadow: 0 0 0 10px transparent;
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+.review-progress-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.review-progress-text .mono {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 60ch;
+}
+.review-progress-log {
+  flex: 1 0 100%;
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  max-height: 220px;
+  overflow: auto;
+  white-space: pre-wrap;
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+
+.added-banner,
+.review-error {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  margin-bottom: 16px;
+  border-radius: var(--r-lg);
+}
+.added-banner {
+  border: 1px solid color-mix(in srgb, var(--accent) 50%, var(--border));
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg-elev));
+}
+.added-banner-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--on-solid);
+  font-weight: 700;
+}
+.review-error {
+  border: 1px solid color-mix(in srgb, var(--blocker) 55%, var(--border));
+  background: color-mix(in srgb, var(--blocker) 10%, var(--bg-elev));
+}
+.review-error-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--blocker);
+  color: var(--on-solid);
+  font-weight: 700;
+}
+.review-error-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.btn.ghost {
+  background: transparent;
+  border-color: var(--border-soft);
+  color: var(--text-dim);
+}
+.btn.ghost:hover {
   color: var(--text);
   border-color: var(--border-strong);
 }

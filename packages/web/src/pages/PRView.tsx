@@ -7,8 +7,8 @@ import { api, postSse, type PRDetail, type Thread } from "../api.js";
 import { splitPatchByFile, type PatchFile } from "../diff.js";
 import { sortFiles, statsForThreads, SEVERITY_RANK, NO_SEVERITY_RANK } from "../fileSort.js";
 import { getTheme, subscribeTheme, type Theme } from "../theme.js";
+import { getPrefs, setPref, subscribePrefs, type ViewMode, type Prefs } from "../prefs.js";
 
-type ViewMode = "unified" | "split";
 type LineThreads = DiffLineAnnotation<Thread[]>;
 
 function useThemeType(): Theme {
@@ -17,12 +17,19 @@ function useThemeType(): Theme {
   return theme;
 }
 
+function usePrefs(): Prefs {
+  const [prefs, setPrefs] = useState<Prefs>(() => getPrefs());
+  useEffect(() => subscribePrefs(setPrefs), []);
+  return prefs;
+}
+
 type StreamState = {
   active: boolean;
   log: string[];
-  /** Set when the most recent run completed; tells the UI whether to show
-   *  the post-run banner ("no issues found" or "added N comments"). */
-  lastRunSummary: { addedThreads: number; staleMarked: number } | null;
+  /** `null` while idle / running. Set when a run completes (success or fail)
+   *  so the UI can show the right "after-run" state. */
+  result: { addedThreads: number; staleMarked: number } | null;
+  error: string | null;
 };
 
 const BODY_PEEK_CHARS = 240;
@@ -35,8 +42,10 @@ export function PRView() {
   const [stream, setStream] = useState<StreamState>({
     active: false,
     log: [],
-    lastRunSummary: null,
+    result: null,
+    error: null,
   });
+  const [showLog, setShowLog] = useState(false);
 
   const load = useCallback(async () => {
     const [d, df] = await Promise.all([api.pr(id), api.diff(id)]);
@@ -82,7 +91,6 @@ export function PRView() {
     return { threadsByFile, inlineByFile, fileLevelByFile, prLevel };
   }, [detail]);
 
-  // Materialize Pierre annotations per file.
   const annByFile = useMemo(() => {
     const out = new Map<string, LineThreads[]>();
     for (const [path, byLine] of inlineByFile) {
@@ -103,9 +111,13 @@ export function PRView() {
   const sortedFiles = useMemo(() => sortFiles(files, threadsByFile), [files, threadsByFile]);
 
   const themeType = useThemeType();
-  const [viewMode, setViewMode] = useState<ViewMode>("unified");
+  const prefs = usePrefs();
+  const viewMode = prefs.viewMode;
+  const sidenavCollapsed = prefs.sidenavCollapsed;
+  const setViewMode = (m: ViewMode) => setPref("viewMode", m);
+  const toggleSidenav = () => setPref("sidenavCollapsed", !sidenavCollapsed);
 
-  // Per-file collapsed state. Auto-collapse when marked viewed.
+  // Per-file collapsed/viewed state. Marking viewed auto-collapses.
   const [collapsedByFile, setCollapsedByFile] = useState<Set<string>>(new Set());
   const [viewedSet, setViewedSet] = useState<Set<string>>(new Set());
   useEffect(() => {
@@ -129,7 +141,6 @@ export function PRView() {
 
   const setViewed = useCallback(
     async (path: string, viewed: boolean) => {
-      // Optimistic.
       setViewedSet((prev) => {
         const next = new Set(prev);
         if (viewed) next.add(path);
@@ -147,7 +158,6 @@ export function PRView() {
         setViewedSet(new Set(viewedFiles));
       } catch (e) {
         console.error(e);
-        // Roll back optimistic change.
         setViewedSet((prev) => {
           const next = new Set(prev);
           if (viewed) next.delete(path);
@@ -159,7 +169,7 @@ export function PRView() {
     [id],
   );
 
-  // File anchors for sidenav scroll-to.
+  // File anchors for sidenav jump.
   const fileRefs = useRef<Map<string, HTMLElement>>(new Map());
   const registerFileEl = useCallback((path: string, el: HTMLElement | null) => {
     if (el) fileRefs.current.set(path, el);
@@ -177,13 +187,15 @@ export function PRView() {
     );
     if (!ok) return;
     await api.clearReview(id);
-    setStream((s) => ({ ...s, lastRunSummary: null }));
+    setStream({ active: false, log: [], result: null, error: null });
     void load();
   }, [id, load]);
 
   const runReview = useCallback(async () => {
-    setStream({ active: true, log: [], lastRunSummary: null });
-    let summary: { addedThreads: number; staleMarked: number } | null = null;
+    setStream({ active: true, log: [], result: null, error: null });
+    setShowLog(false);
+    let result: StreamState["result"] = null;
+    let error: string | null = null;
     try {
       await postSse(`/api/prs/${id}/review`, {}, (ev) => {
         const data = ev.data as Record<string, unknown> | string | undefined;
@@ -198,17 +210,15 @@ export function PRView() {
           setStream((s) => ({ ...s, log: [...s.log, pick("data")] }));
         } else if (ev.event === "done") {
           const d = ev.data as { addedThreads: number; staleMarked: number };
-          summary = d;
-          setStream((s) => ({
-            ...s,
-            log: [...s.log, `added ${d.addedThreads} threads, ${d.staleMarked} stale`],
-          }));
+          result = d;
         } else if (ev.event === "error") {
-          setStream((s) => ({ ...s, log: [...s.log, `ERROR: ${pick("message")}`] }));
+          error = pick("message") || "Review failed.";
         }
       });
+    } catch (e) {
+      error = (e as Error).message;
     } finally {
-      setStream((s) => ({ ...s, active: false, lastRunSummary: summary }));
+      setStream((s) => ({ ...s, active: false, result, error }));
       void load();
     }
   }, [id, load]);
@@ -218,9 +228,14 @@ export function PRView() {
   const resolved = detail.threads.filter((t) => t.status === "resolved");
   const openCount = detail.threads.filter((t) => t.status === "open").length;
   const showEmptyBanner =
-    (stream.lastRunSummary?.addedThreads === 0 ||
-      (detail.lastReview?.status === "done" && detail.threads.length === 0)) &&
-    !stream.active;
+    !stream.active &&
+    !stream.error &&
+    openCount === 0 &&
+    (stream.result?.addedThreads === 0 ||
+      (detail.lastReview?.status === "done" && detail.threads.length === 0));
+
+  const showAddedBanner =
+    !stream.active && !stream.error && stream.result !== null && stream.result.addedThreads > 0;
 
   return (
     <div className="prview">
@@ -264,31 +279,54 @@ export function PRView() {
             Clear review
           </button>
         )}
-        <button className="btn primary" onClick={runReview} disabled={stream.active}>
-          {stream.active ? "Running…" : detail.threads.length ? "Re-run review" : "Run review"}
+        <button
+          className={`btn primary review-btn ${stream.active ? "is-running" : ""}`}
+          onClick={runReview}
+          disabled={stream.active}
+        >
+          {stream.active && <span className="btn-spinner" aria-hidden />}
+          {stream.active ? "Reviewing…" : detail.threads.length ? "Re-run review" : "Run review"}
         </button>
       </header>
 
-      <div className="pr-body-grid">
+      <div className={`pr-body-grid ${sidenavCollapsed ? "sidenav-closed" : ""}`}>
         <aside className="pr-sidenav">
-          <SideNav
-            files={sortedFiles}
-            threadsByFile={threadsByFile}
-            viewedSet={viewedSet}
-            onJump={scrollToFile}
-          />
+          {sidenavCollapsed ? (
+            <button
+              type="button"
+              className="sidenav-stub"
+              onClick={toggleSidenav}
+              title="Show files panel"
+              aria-label="Show files panel"
+            >
+              <span aria-hidden>›</span>
+            </button>
+          ) : (
+            <SideNav
+              files={sortedFiles}
+              threadsByFile={threadsByFile}
+              viewedSet={viewedSet}
+              onJump={scrollToFile}
+              onCollapse={toggleSidenav}
+            />
+          )}
         </aside>
 
         <div className="pr-main">
-          {stream.log.length > 0 && <pre className="stream-log">{stream.log.join("\n")}</pre>}
-
-          {showEmptyBanner && (
-            <NoIssuesBanner
-              lastReview={detail.lastReview}
-              openCount={openCount}
-              justRan={stream.lastRunSummary?.addedThreads === 0}
+          {stream.active && (
+            <ReviewProgress log={stream.log} showLog={showLog} onToggleLog={() => setShowLog((v) => !v)} />
+          )}
+          {stream.error && !stream.active && (
+            <ReviewError message={stream.error} onDismiss={() => setStream((s) => ({ ...s, error: null }))} />
+          )}
+          {showAddedBanner && (
+            <AddedBanner
+              addedThreads={stream.result!.addedThreads}
+              staleMarked={stream.result!.staleMarked}
+              onDismiss={() => setStream((s) => ({ ...s, result: null }))}
             />
           )}
+          {showEmptyBanner && <NoIssuesBanner lastReview={detail.lastReview} />}
 
           {detail.pr.body && <CollapsiblePrBody body={detail.pr.body} />}
 
@@ -337,7 +375,6 @@ export function PRView() {
 
 const PIERRE_THEME = { dark: "pierre-dark", light: "pierre-light" } as const;
 
-/** Severity-key for sorting/coloring sidenav entries. */
 function topOpenSeverity(threads: Thread[]): { rank: number; severity: string | null } {
   let rank = NO_SEVERITY_RANK;
   let severity: string | null = null;
@@ -357,11 +394,13 @@ function SideNav({
   threadsByFile,
   viewedSet,
   onJump,
+  onCollapse,
 }: {
   files: PatchFile[];
   threadsByFile: Map<string, Thread[]>;
   viewedSet: Set<string>;
   onJump: (path: string) => void;
+  onCollapse: () => void;
 }) {
   const [filter, setFilter] = useState("");
   const matches = filter.trim().toLowerCase();
@@ -369,7 +408,18 @@ function SideNav({
   return (
     <div className="sidenav-inner">
       <div className="sidenav-header">
-        <h3>Files ({files.length})</h3>
+        <div className="sidenav-title-row">
+          <h3>Files ({files.length})</h3>
+          <button
+            type="button"
+            className="sidenav-collapse"
+            onClick={onCollapse}
+            title="Hide files panel"
+            aria-label="Hide files panel"
+          >
+            ‹
+          </button>
+        </div>
         <input
           className="sidenav-filter"
           type="text"
@@ -420,16 +470,87 @@ function SideNav({
   );
 }
 
-function NoIssuesBanner({
-  lastReview,
-  openCount,
-  justRan,
+function ReviewProgress({
+  log,
+  showLog,
+  onToggleLog,
 }: {
-  lastReview: PRDetail["lastReview"];
-  openCount: number;
-  justRan: boolean;
+  log: string[];
+  showLog: boolean;
+  onToggleLog: () => void;
 }) {
-  if (openCount > 0) return null;
+  const lastLine = log[log.length - 1] ?? "";
+  return (
+    <div className="review-progress" role="status" aria-live="polite">
+      <span className="pulse" aria-hidden />
+      <div className="review-progress-text">
+        <strong>Reviewing…</strong>
+        {lastLine && <span className="muted small mono">{truncate(lastLine, 120)}</span>}
+      </div>
+      <div className="spacer" />
+      {log.length > 0 && (
+        <button type="button" className="btn small ghost" onClick={onToggleLog}>
+          {showLog ? "Hide log" : "Show log"}
+        </button>
+      )}
+      {showLog && (
+        <pre className="review-progress-log" aria-hidden={!showLog}>
+          {log.join("\n")}
+        </pre>
+      )}
+    </div>
+  );
+}
+
+function ReviewError({ message, onDismiss }: { message: string; onDismiss: () => void }) {
+  return (
+    <div className="review-error" role="alert">
+      <span className="review-error-glyph" aria-hidden>
+        !
+      </span>
+      <div className="review-error-text">
+        <strong>Review failed.</strong>
+        <div className="muted small">{message}</div>
+      </div>
+      <div className="spacer" />
+      <button type="button" className="btn small ghost" onClick={onDismiss}>
+        Dismiss
+      </button>
+    </div>
+  );
+}
+
+function AddedBanner({
+  addedThreads,
+  staleMarked,
+  onDismiss,
+}: {
+  addedThreads: number;
+  staleMarked: number;
+  onDismiss: () => void;
+}) {
+  const stalePart = staleMarked > 0 ? `, ${staleMarked} thread${staleMarked === 1 ? "" : "s"} marked stale` : "";
+  return (
+    <div className="added-banner" role="status">
+      <span className="added-banner-glyph" aria-hidden>
+        +
+      </span>
+      <div>
+        <strong>Review complete.</strong>
+        <div className="muted small">
+          Added {addedThreads} comment{addedThreads === 1 ? "" : "s"}
+          {stalePart}.
+        </div>
+      </div>
+      <div className="spacer" />
+      <button type="button" className="btn small ghost" onClick={onDismiss}>
+        Dismiss
+      </button>
+    </div>
+  );
+}
+
+function NoIssuesBanner({ lastReview }: { lastReview: PRDetail["lastReview"] }) {
   const when = lastReview?.finishedAt
     ? new Date(lastReview.finishedAt).toLocaleString()
     : "earlier";
@@ -439,7 +560,7 @@ function NoIssuesBanner({
         ✓
       </span>
       <div>
-        <strong>{justRan ? "No issues found." : "No outstanding issues."}</strong>
+        <strong>No issues found.</strong>
         <div className="muted small">
           {lastReview
             ? `Last review ran ${when} on ${lastReview.headSha.slice(0, 7)} via ${lastReview.provider}.`
@@ -465,7 +586,11 @@ function CollapsiblePrBody({ body }: { body: string }) {
       <div className="pr-body-content">
         <ReactMarkdown remarkPlugins={[remarkGfm]}>{body}</ReactMarkdown>
       </div>
-      <button className="pr-body-toggle" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
+      <button
+        className="pr-body-toggle"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+      >
         {open ? "Collapse description" : "Expand description"}
       </button>
     </section>
@@ -501,13 +626,15 @@ function FileBlock({
 }) {
   const stats = statsForThreads(allThreads);
   const sev = topOpenSeverity(allThreads).severity;
-  return (
-    <article
-      className={`file-block ${collapsed ? "collapsed" : ""} ${viewed ? "viewed" : ""}`}
-      ref={(el) => registerRef(file.path, el)}
-    >
-      <header className="file-header sticky">
+
+  // Pierre renders this slot on the left side of its file header. We use it
+  // to host the fold chevron and the severity dot so all per-file controls
+  // share one row.
+  const renderHeaderPrefix = useCallback(
+    () => (
+      <span className="file-header-prefix">
         <button
+          type="button"
           className="file-fold"
           onClick={onToggleCollapsed}
           aria-expanded={!collapsed}
@@ -518,13 +645,27 @@ function FileBlock({
           </span>
         </button>
         <span className={`sev-dot ${sev ? `sev-${sev}` : "none"}`} aria-hidden />
-        <span className="file-path" title={file.path}>
-          {file.path}
-        </span>
-        <div className="spacer" />
-        {stats.openCount > 0 && <span className="pill open">{stats.openCount} open</span>}
-        {stats.resolvedCount > 0 && <span className="pill ok">{stats.resolvedCount} resolved</span>}
-        <label className="viewed-toggle" title="Mark this file as viewed (auto-collapses)">
+      </span>
+    ),
+    [collapsed, onToggleCollapsed, sev],
+  );
+
+  // Pierre renders this slot on the right side of its file header — perfect
+  // for counts plus the Viewed checkbox.
+  const renderHeaderMetadata = useCallback(
+    () => (
+      <span className="file-header-metadata">
+        {stats.openCount > 0 && (
+          <span className="pill open">{stats.openCount} open</span>
+        )}
+        {stats.resolvedCount > 0 && (
+          <span className="pill ok">{stats.resolvedCount} resolved</span>
+        )}
+        <label
+          className="viewed-toggle"
+          title="Mark this file as viewed (auto-collapses)"
+          onClick={(e) => e.stopPropagation()}
+        >
           <input
             type="checkbox"
             checked={viewed}
@@ -532,41 +673,47 @@ function FileBlock({
           />
           <span>Viewed</span>
         </label>
-      </header>
+      </span>
+    ),
+    [stats.openCount, stats.resolvedCount, viewed, onToggleViewed],
+  );
 
-      {!collapsed && (
-        <div className="file-body">
-          {fileThreads.length > 0 && (
-            <div className="file-threads">
-              {fileThreads.map((t) => (
-                <ThreadCard key={t.id} thread={t} onChange={onChange} />
-              ))}
-            </div>
-          )}
-          <PatchDiff<Thread[]>
-            patch={file.patch}
-            className="pierre-diff"
-            options={{
-              theme: PIERRE_THEME,
-              themeType,
-              diffStyle: viewMode,
-              diffIndicators: "bars",
-              lineDiffType: "word",
-              overflow: "wrap",
-              stickyHeader: false,
-            }}
-            lineAnnotations={annotations}
-            renderHeaderMetadata={() => null}
-            renderAnnotation={(a) => (
-              <div className="pierre-annotation">
-                {a.metadata.map((t) => (
-                  <ThreadCard key={t.id} thread={t} onChange={onChange} />
-                ))}
-              </div>
-            )}
-          />
+  return (
+    <article
+      className={`file-block ${collapsed ? "collapsed" : ""} ${viewed ? "viewed" : ""}`}
+      ref={(el) => registerRef(file.path, el)}
+    >
+      {fileThreads.length > 0 && !collapsed && (
+        <div className="file-threads">
+          {fileThreads.map((t) => (
+            <ThreadCard key={t.id} thread={t} onChange={onChange} />
+          ))}
         </div>
       )}
+      <PatchDiff<Thread[]>
+        patch={file.patch}
+        className="pierre-diff"
+        options={{
+          theme: PIERRE_THEME,
+          themeType,
+          diffStyle: viewMode,
+          diffIndicators: "bars",
+          lineDiffType: "word",
+          overflow: "wrap",
+          stickyHeader: true,
+          collapsed,
+        }}
+        lineAnnotations={annotations}
+        renderHeaderPrefix={renderHeaderPrefix}
+        renderHeaderMetadata={renderHeaderMetadata}
+        renderAnnotation={(a) => (
+          <div className="pierre-annotation">
+            {a.metadata.map((t) => (
+              <ThreadCard key={t.id} thread={t} onChange={onChange} />
+            ))}
+          </div>
+        )}
+      />
     </article>
   );
 }
@@ -687,4 +834,9 @@ function CommentBlock({ comment: c }: { comment: Thread["comments"][number] }) {
       </div>
     </div>
   );
+}
+
+function truncate(s: string, max: number): string {
+  if (s.length <= max) return s;
+  return s.slice(0, max - 1) + "…";
 }
