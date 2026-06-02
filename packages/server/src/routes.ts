@@ -23,6 +23,7 @@ import { runReview, runReply, runRevalidate, setThreadStatus } from "./review.js
 import * as gh from "./github.js";
 import { listProviderStatus, getProvider } from "./providers/index.js";
 import { getSettings, setProvider } from "./settings.js";
+import { listViewedFiles, setFileViewed } from "./viewedFiles.js";
 
 function sseInit(reply: FastifyReply): void {
   reply.raw.writeHead(200, {
@@ -130,6 +131,20 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     const repo = requireRepo(pr.repo_id);
     const refreshed = await hydratePR(repo, pr.number);
     const threads = listThreadsForPR(refreshed.id);
+    const lastReviewRow = getDb()
+      .prepare("SELECT * FROM reviews WHERE pr_id = ? ORDER BY id DESC LIMIT 1")
+      .get(refreshed.id) as
+      | {
+          id: number;
+          head_sha: string;
+          provider: string;
+          status: string;
+          summary: string | null;
+          started_at: string;
+          finished_at: string | null;
+          error: string | null;
+        }
+      | undefined;
     return {
       pr: {
         id: refreshed.id,
@@ -165,6 +180,19 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
           createdAt: c.created_at,
         })),
       })),
+      viewedFiles: listViewedFiles(refreshed.id, refreshed.head_sha),
+      lastReview: lastReviewRow
+        ? {
+            id: lastReviewRow.id,
+            headSha: lastReviewRow.head_sha,
+            provider: lastReviewRow.provider,
+            status: lastReviewRow.status,
+            summary: lastReviewRow.summary,
+            startedAt: lastReviewRow.started_at,
+            finishedAt: lastReviewRow.finished_at,
+            error: lastReviewRow.error,
+          }
+        : null,
     };
   });
 
@@ -184,6 +212,15 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     if (!pr) throw new Error(`pr ${prId} not found`);
     const repo = requireRepo(pr.repo_id);
     return gh.getPRFiles(repo.owner, repo.name, pr.number);
+  });
+
+  app.post("/api/prs/:prId/viewed", async (req) => {
+    const { prId } = z.object({ prId: z.coerce.number() }).parse(req.params);
+    const body = z.object({ filePath: z.string().min(1), viewed: z.boolean() }).parse(req.body);
+    const pr = getPRById(prId);
+    if (!pr) throw new Error(`pr ${prId} not found`);
+    setFileViewed(prId, body.filePath, pr.head_sha, body.viewed);
+    return { viewedFiles: listViewedFiles(prId, pr.head_sha) };
   });
 
   // --- SSE actions ---

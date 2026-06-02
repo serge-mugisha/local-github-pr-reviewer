@@ -85,6 +85,14 @@ function migrate(db: Database.Database): void {
       updated_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS viewed_files (
+      pr_id INTEGER NOT NULL REFERENCES prs(id) ON DELETE CASCADE,
+      file_path TEXT NOT NULL,
+      head_sha TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (pr_id, file_path)
+    );
+
     CREATE INDEX IF NOT EXISTS idx_threads_pr ON threads(pr_id);
     CREATE INDEX IF NOT EXISTS idx_comments_thread ON comments(thread_id);
     CREATE INDEX IF NOT EXISTS idx_prs_repo ON prs(repo_id);
@@ -150,6 +158,12 @@ export interface CommentRow {
 export interface SkillsRow {
   repo_id: number;
   body: string;
+  updated_at: string;
+}
+export interface ViewedFileRow {
+  pr_id: number;
+  file_path: string;
+  head_sha: string;
   updated_at: string;
 }
 
