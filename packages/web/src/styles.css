@@ -1241,3 +1241,295 @@ a:focus-visible {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ── PR view layout: sidenav + main pane ───────────────────────────────── */
+.pr-body-grid {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+.pr-main {
+  min-width: 0;
+}
+@media (max-width: 900px) {
+  .pr-body-grid {
+    grid-template-columns: 1fr;
+  }
+  .pr-sidenav {
+    display: none;
+  }
+}
+
+.pr-sidenav {
+  position: sticky;
+  top: 124px;
+  max-height: calc(100vh - 140px);
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--bg-elev);
+}
+.sidenav-inner {
+  padding: 10px 8px;
+}
+.sidenav-header {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 4px 6px 8px;
+  border-bottom: 1px solid var(--border-soft);
+  margin-bottom: 6px;
+}
+.sidenav-header h3 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.sidenav-filter {
+  width: 100%;
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: 5px 8px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text);
+}
+.sidenav-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.sidenav-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+}
+.sidenav-row:hover {
+  background: var(--bg-hover);
+}
+.sidenav-row.viewed .sidenav-path {
+  color: var(--text-faint);
+  text-decoration: line-through;
+}
+.sidenav-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: "Geist Mono", monospace;
+  font-size: 11.5px;
+  direction: rtl; /* keeps the basename visible on truncation */
+  text-align: left;
+}
+.sidenav-counts {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.sidenav-counts .pill {
+  font-size: 10.5px;
+  padding: 0 5px;
+}
+.sidenav-counts .check {
+  color: var(--ok);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.sev-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-faint);
+  flex: 0 0 auto;
+}
+.sev-dot.sev-blocker {
+  background: var(--blocker);
+}
+.sev-dot.sev-concern {
+  background: var(--concern);
+}
+.sev-dot.sev-nit {
+  background: var(--nit);
+}
+.sev-dot.sev-praise {
+  background: var(--praise);
+}
+.sev-dot.none {
+  background: var(--border-strong);
+}
+
+.pill.open {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+/* ── Sticky per-file header (replaces Pierre's internal one) ───────────── */
+.diff .file-block.collapsed {
+  /* keep the header visible but hide the diff body */
+}
+.diff .file-block .file-header.sticky {
+  position: sticky;
+  top: 124px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: linear-gradient(180deg, var(--bg-elev2), var(--bg-elev));
+  border-bottom: 1px solid var(--border);
+  font-family: "Geist Mono", monospace;
+  font-size: 12.5px;
+}
+.file-fold {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+  padding: 2px;
+  border-radius: var(--r-xs);
+  cursor: pointer;
+}
+.file-fold:hover {
+  color: var(--text);
+}
+.chevron {
+  display: inline-block;
+  transition: transform 0.15s ease;
+}
+.chevron.right {
+  transform: rotate(-90deg);
+}
+.chevron.down {
+  transform: rotate(0);
+}
+.file-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+.file-block.viewed .file-path {
+  color: var(--text-faint);
+}
+.viewed-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--text-dim);
+  cursor: pointer;
+  user-select: none;
+}
+.viewed-toggle input {
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.file-block.viewed .viewed-toggle {
+  color: var(--ok);
+}
+.file-body {
+  min-width: 0;
+}
+
+/* Push Pierre's own header out of the way; ours replaces it. */
+.pierre-diff [data-diffs-file-header],
+.pierre-diff .diffs-file-header {
+  display: none;
+}
+
+/* ── No-issues banner ──────────────────────────────────────────────────── */
+.no-issues-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  margin-bottom: 16px;
+  border: 1px solid color-mix(in srgb, var(--ok) 50%, var(--border));
+  background: color-mix(in srgb, var(--ok) 10%, var(--bg-elev));
+  border-radius: var(--r-lg);
+}
+.no-issues-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--ok);
+  color: var(--on-solid);
+  font-weight: 700;
+}
+
+/* ── Collapsible PR description ────────────────────────────────────────── */
+.pr-body.collapsible {
+  position: relative;
+}
+.pr-body.collapsible.closed .pr-body-content {
+  max-height: 6em;
+  overflow: hidden;
+  mask-image: linear-gradient(to bottom, black 60%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, black 60%, transparent 100%);
+}
+.pr-body-toggle {
+  appearance: none;
+  margin-top: 6px;
+  padding: 4px 10px;
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.pr-body-toggle:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+
+/* ── Copy-markdown button on AI comments ───────────────────────────────── */
+.comment-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.comment-copy {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: var(--bg-inset);
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 11px;
+  padding: 1px 8px;
+  border-radius: var(--r-xs);
+  cursor: pointer;
+  transition:
+    color 0.15s ease,
+    border-color 0.15s ease;
+}
+.comment-copy:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+}

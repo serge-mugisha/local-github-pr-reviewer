@@ -56,10 +56,23 @@ export interface PR {
   updatedAt: string;
 }
 
+export interface LastReview {
+  id: number;
+  headSha: string;
+  provider: string;
+  status: string;
+  summary: string | null;
+  startedAt: string;
+  finishedAt: string | null;
+  error: string | null;
+}
+
 export interface PRDetail {
   pr: PR;
   repo: { id: number; owner: string; name: string };
   threads: Thread[];
+  viewedFiles: string[];
+  lastReview: LastReview | null;
 }
 
 export interface ProviderStatus {
@@ -133,6 +146,11 @@ export const api = {
     jsonReq<{ ok: true }>(`/api/threads/${threadId}/status`, {
       method: "POST",
       body: JSON.stringify({ status }),
+    }),
+  setFileViewed: (prId: number, filePath: string, viewed: boolean) =>
+    jsonReq<{ viewedFiles: string[] }>(`/api/prs/${prId}/viewed`, {
+      method: "POST",
+      body: JSON.stringify({ filePath, viewed }),
     }),
   setProvider: (provider: string) =>
     jsonReq<{ provider: string }>(`/api/settings`, {
