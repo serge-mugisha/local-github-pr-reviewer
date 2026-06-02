@@ -314,10 +314,17 @@ export function PRView() {
 
         <div className="pr-main">
           {stream.active && (
-            <ReviewProgress log={stream.log} showLog={showLog} onToggleLog={() => setShowLog((v) => !v)} />
+            <ReviewProgress
+              log={stream.log}
+              showLog={showLog}
+              onToggleLog={() => setShowLog((v) => !v)}
+            />
           )}
           {stream.error && !stream.active && (
-            <ReviewError message={stream.error} onDismiss={() => setStream((s) => ({ ...s, error: null }))} />
+            <ReviewError
+              message={stream.error}
+              onDismiss={() => setStream((s) => ({ ...s, error: null }))}
+            />
           )}
           {showAddedBanner && (
             <AddedBanner
@@ -529,7 +536,8 @@ function AddedBanner({
   staleMarked: number;
   onDismiss: () => void;
 }) {
-  const stalePart = staleMarked > 0 ? `, ${staleMarked} thread${staleMarked === 1 ? "" : "s"} marked stale` : "";
+  const stalePart =
+    staleMarked > 0 ? `, ${staleMarked} thread${staleMarked === 1 ? "" : "s"} marked stale` : "";
   return (
     <div className="added-banner" role="status">
       <span className="added-banner-glyph" aria-hidden>
@@ -586,11 +594,7 @@ function CollapsiblePrBody({ body }: { body: string }) {
       <div className="pr-body-content">
         <ReactMarkdown remarkPlugins={[remarkGfm]}>{body}</ReactMarkdown>
       </div>
-      <button
-        className="pr-body-toggle"
-        onClick={() => setOpen((v) => !v)}
-        aria-expanded={open}
-      >
+      <button className="pr-body-toggle" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
         {open ? "Collapse description" : "Expand description"}
       </button>
     </section>
@@ -655,12 +659,8 @@ function FileBlock({
   const renderHeaderMetadata = useCallback(
     () => (
       <span className="file-header-metadata">
-        {stats.openCount > 0 && (
-          <span className="pill open">{stats.openCount} open</span>
-        )}
-        {stats.resolvedCount > 0 && (
-          <span className="pill ok">{stats.resolvedCount} resolved</span>
-        )}
+        {stats.openCount > 0 && <span className="pill open">{stats.openCount} open</span>}
+        {stats.resolvedCount > 0 && <span className="pill ok">{stats.resolvedCount} resolved</span>}
         <label
           className="viewed-toggle"
           title="Mark this file as viewed (auto-collapses)"
