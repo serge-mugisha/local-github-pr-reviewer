@@ -733,6 +733,37 @@ pre {
   padding: 0;
   background: transparent;
 }
+/* Media embedded in PR descriptions (raw <img>/<video>) points at GitHub
+   user-attachments, which only load in an authenticated GitHub session. We
+   swap the media for a link to the original rather than show a broken image. */
+.media-embed {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin: 4px 0;
+  padding: 5px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-inset);
+  color: var(--text);
+  font-size: 12.5px;
+  text-decoration: none;
+  vertical-align: middle;
+}
+.media-embed:hover {
+  border-color: var(--border-strong);
+  color: var(--accent);
+}
+.media-embed.disabled {
+  color: var(--text-faint);
+  cursor: default;
+}
+.media-embed-icon {
+  font-size: 12px;
+}
+.media-embed-ext {
+  color: var(--text-faint);
+}
 
 /* ── Diff file cards (rendered by @pierre/diffs) ───────────────────────── */
 .diff {

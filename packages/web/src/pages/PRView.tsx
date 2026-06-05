@@ -4,6 +4,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { PatchDiff, type DiffLineAnnotation } from "@pierre/diffs/react";
 import { api, postSse, type PRDetail, type Thread } from "../api.js";
+import { Markdown } from "../components/Markdown.js";
 import { ReviewSettingsPanel } from "../components/ReviewSettingsPanel.js";
 import type { ReviewConfigFields } from "../components/ReviewConfigEditor.js";
 import { splitPatchByFile, type PatchFile } from "../diff.js";
@@ -600,14 +601,14 @@ function CollapsiblePrBody({ body }: { body: string }) {
   if (!long) {
     return (
       <section className="pr-body">
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>{body}</ReactMarkdown>
+        <Markdown>{body}</Markdown>
       </section>
     );
   }
   return (
     <section className={`pr-body collapsible ${open ? "open" : "closed"}`}>
       <div className="pr-body-content">
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>{body}</ReactMarkdown>
+        <Markdown>{body}</Markdown>
       </div>
       <button className="pr-body-toggle" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
         {open ? "Collapse description" : "Expand description"}
