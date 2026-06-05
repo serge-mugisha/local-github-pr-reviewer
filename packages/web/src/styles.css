@@ -1458,6 +1458,8 @@ a:focus-visible {
 }
 .chevron {
   display: inline-block;
+  font-size: 17px;
+  line-height: 1;
   transition: transform 0.15s ease;
 }
 .chevron.right {
@@ -1702,54 +1704,63 @@ a:focus-visible {
 
 /* ── Review settings: catalog editor, PR panel, presets ────────────────── */
 .review-settings-panel {
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   border-radius: var(--r);
   background: var(--bg-elev);
-  margin-bottom: 16px;
-  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+  margin-bottom: 18px;
+  padding: 15px 18px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
 }
 .review-settings-panel.loading-stub {
-  height: 44px;
+  height: 96px;
   opacity: 0.5;
 }
-.rsp-bar {
+.rsp-head {
   display: flex;
   align-items: center;
   gap: 10px;
-  width: 100%;
-  appearance: none;
-  border: 0;
-  background: transparent;
-  color: var(--text);
-  font: inherit;
-  text-align: left;
-  padding: 11px 14px;
-  cursor: pointer;
-}
-.rsp-bar:hover {
-  background: var(--bg-hover);
 }
 .rsp-title {
   font-weight: 600;
-  font-size: 13px;
-}
-.rsp-summary {
-  font-size: 12px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 46ch;
-}
-.rsp-body {
-  padding: 4px 14px 16px;
-  border-top: 1px solid var(--border-soft);
-  animation: rise 0.3s cubic-bezier(0.16, 1, 0.3, 1) backwards;
+  font-size: 14px;
+  letter-spacing: -0.01em;
 }
 .rsp-presets {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 12px 0;
+}
+.rsp-advanced-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  appearance: none;
+  background: transparent;
+  border: 0;
+  border-top: 1px solid var(--border-soft);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  text-align: left;
+  padding: 12px 0 0;
+  cursor: pointer;
+}
+.rsp-advanced-toggle:hover {
+  color: var(--accent);
+}
+.rsp-advanced-toggle .chevron {
+  color: var(--text-faint);
+}
+.rsp-advanced {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  animation: rise 0.3s cubic-bezier(0.16, 1, 0.3, 1) backwards;
 }
 .rsp-preset-apply {
   display: inline-flex;
@@ -1771,7 +1782,6 @@ a:focus-visible {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-top: 16px;
   flex-wrap: wrap;
 }
 .rsp-save-preset {
