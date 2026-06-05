@@ -93,6 +93,38 @@ function migrate(db: Database.Database): void {
       PRIMARY KEY (pr_id, file_path)
     );
 
+    -- Per-PR review configuration. Absent row = inherit global defaults.
+    CREATE TABLE IF NOT EXISTS pr_review_settings (
+      pr_id INTEGER PRIMARY KEY REFERENCES prs(id) ON DELETE CASCADE,
+      categories TEXT NOT NULL,
+      strictness TEXT NOT NULL DEFAULT 'balanced',
+      custom_rules TEXT NOT NULL DEFAULT '',
+      path_include TEXT NOT NULL DEFAULT '',
+      path_exclude TEXT NOT NULL DEFAULT '',
+      updated_at TEXT NOT NULL
+    );
+
+    -- Singleton (id = 1): default categories/strictness for new PRs plus
+    -- custom rules applied to every review in every repo.
+    CREATE TABLE IF NOT EXISTS global_review_settings (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      categories TEXT NOT NULL,
+      strictness TEXT NOT NULL DEFAULT 'balanced',
+      custom_rules TEXT NOT NULL DEFAULT '',
+      updated_at TEXT NOT NULL
+    );
+
+    -- Named, reusable bundles of (categories + strictness + custom rules).
+    CREATE TABLE IF NOT EXISTS rule_presets (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL UNIQUE,
+      categories TEXT NOT NULL,
+      strictness TEXT NOT NULL DEFAULT 'balanced',
+      custom_rules TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_threads_pr ON threads(pr_id);
     CREATE INDEX IF NOT EXISTS idx_comments_thread ON comments(thread_id);
     CREATE INDEX IF NOT EXISTS idx_prs_repo ON prs(repo_id);
@@ -164,6 +196,31 @@ export interface ViewedFileRow {
   pr_id: number;
   file_path: string;
   head_sha: string;
+  updated_at: string;
+}
+export interface PrReviewSettingsRow {
+  pr_id: number;
+  categories: string;
+  strictness: string;
+  custom_rules: string;
+  path_include: string;
+  path_exclude: string;
+  updated_at: string;
+}
+export interface GlobalReviewSettingsRow {
+  id: number;
+  categories: string;
+  strictness: string;
+  custom_rules: string;
+  updated_at: string;
+}
+export interface RulePresetRow {
+  id: number;
+  name: string;
+  categories: string;
+  strictness: string;
+  custom_rules: string;
+  created_at: string;
   updated_at: string;
 }
 

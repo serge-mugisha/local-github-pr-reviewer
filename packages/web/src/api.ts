@@ -75,6 +75,47 @@ export interface PRDetail {
   lastReview: LastReview | null;
 }
 
+export interface CategoryDef {
+  key: string;
+  label: string;
+  description: string;
+  defaultOn: boolean;
+}
+
+export interface StrictnessDef {
+  key: string;
+  label: string;
+  description: string;
+}
+
+export interface ReviewCatalog {
+  categories: CategoryDef[];
+  strictness: StrictnessDef[];
+}
+
+export interface GlobalReviewConfig {
+  categories: string[];
+  strictness: string;
+  customRules: string;
+}
+
+export interface PrReviewConfig {
+  categories: string[];
+  strictness: string;
+  customRules: string;
+  pathInclude: string;
+  pathExclude: string;
+  customized: boolean;
+}
+
+export interface RulePreset {
+  id: number;
+  name: string;
+  categories: string[];
+  strictness: string;
+  customRules: string;
+}
+
 export interface ProviderStatus {
   id: string;
   displayName: string;
@@ -156,6 +197,42 @@ export const api = {
     jsonReq<{ provider: string }>(`/api/settings`, {
       method: "PUT",
       body: JSON.stringify({ provider }),
+    }),
+
+  reviewCatalog: () => jsonReq<ReviewCatalog>("/api/review-config/catalog"),
+  globalReviewConfig: () => jsonReq<GlobalReviewConfig>("/api/review-config/global"),
+  saveGlobalReviewConfig: (cfg: Partial<GlobalReviewConfig>) =>
+    jsonReq<GlobalReviewConfig>("/api/review-config/global", {
+      method: "PUT",
+      body: JSON.stringify(cfg),
+    }),
+
+  presets: () => jsonReq<RulePreset[]>("/api/review-config/presets"),
+  createPreset: (p: Omit<RulePreset, "id">) =>
+    jsonReq<RulePreset>("/api/review-config/presets", {
+      method: "POST",
+      body: JSON.stringify(p),
+    }),
+  updatePreset: (id: number, p: Partial<Omit<RulePreset, "id">>) =>
+    jsonReq<RulePreset>(`/api/review-config/presets/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(p),
+    }),
+  deletePreset: (id: number) =>
+    jsonReq<{ ok: true }>(`/api/review-config/presets/${id}`, { method: "DELETE" }),
+
+  prReviewConfig: (prId: number) => jsonReq<PrReviewConfig>(`/api/prs/${prId}/review-config`),
+  savePrReviewConfig: (prId: number, cfg: Partial<Omit<PrReviewConfig, "customized">>) =>
+    jsonReq<PrReviewConfig>(`/api/prs/${prId}/review-config`, {
+      method: "PUT",
+      body: JSON.stringify(cfg),
+    }),
+  resetPrReviewConfig: (prId: number) =>
+    jsonReq<PrReviewConfig>(`/api/prs/${prId}/review-config`, { method: "DELETE" }),
+  previewReviewConfig: (prId: number, cfg: Omit<PrReviewConfig, "customized">) =>
+    jsonReq<{ instructions: string }>(`/api/prs/${prId}/review-config/preview`, {
+      method: "POST",
+      body: JSON.stringify(cfg),
     }),
 };
 

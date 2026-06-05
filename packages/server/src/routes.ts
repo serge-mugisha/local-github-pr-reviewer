@@ -19,6 +19,20 @@ import {
   clearReviewData,
 } from "./prs.js";
 import { getSkills, setSkills } from "./skills.js";
+import {
+  getGlobalReviewConfig,
+  setGlobalReviewConfig,
+  getPrReviewConfig,
+  setPrReviewConfig,
+  resetPrReviewConfig,
+  prHasOwnSettings,
+  listPresets,
+  createPreset,
+  updatePreset,
+  deletePreset,
+} from "./reviewConfig.js";
+import { catalogForClient } from "./reviewCatalog.js";
+import { buildReviewInstructions } from "./providers/prompt.js";
 import { runReview, runReply, runRevalidate, setThreadStatus } from "./review.js";
 import * as gh from "./github.js";
 import { listProviderStatus, getProvider } from "./providers/index.js";
@@ -122,6 +136,115 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     const body = z.object({ body: z.string() }).parse(req.body);
     setSkills(repoId, body.body);
     return { body: getSkills(repoId) };
+  });
+
+  // --- Review configuration: catalog, global defaults, presets ---
+
+  const configBody = z.object({
+    categories: z.array(z.string()).optional(),
+    strictness: z.string().optional(),
+    customRules: z.string().optional(),
+  });
+
+  app.get("/api/review-config/catalog", async () => catalogForClient());
+
+  app.get("/api/review-config/global", async () => getGlobalReviewConfig());
+
+  app.put("/api/review-config/global", async (req) => {
+    const body = configBody.parse(req.body);
+    return setGlobalReviewConfig(body);
+  });
+
+  app.get("/api/review-config/presets", async () => listPresets());
+
+  app.post("/api/review-config/presets", async (req) => {
+    const body = z
+      .object({
+        name: z.string().min(1),
+        categories: z.array(z.string()).default([]),
+        strictness: z.string().default("balanced"),
+        customRules: z.string().default(""),
+      })
+      .parse(req.body);
+    return createPreset(body);
+  });
+
+  app.put("/api/review-config/presets/:id", async (req) => {
+    const { id } = z.object({ id: z.coerce.number() }).parse(req.params);
+    const body = z
+      .object({
+        name: z.string().min(1).optional(),
+        categories: z.array(z.string()).optional(),
+        strictness: z.string().optional(),
+        customRules: z.string().optional(),
+      })
+      .parse(req.body);
+    return updatePreset(id, body);
+  });
+
+  app.delete("/api/review-config/presets/:id", async (req) => {
+    const { id } = z.object({ id: z.coerce.number() }).parse(req.params);
+    deletePreset(id);
+    return { ok: true };
+  });
+
+  // --- Per-PR review configuration ---
+
+  app.get("/api/prs/:prId/review-config", async (req) => {
+    const { prId } = z.object({ prId: z.coerce.number() }).parse(req.params);
+    const pr = getPRById(prId);
+    if (!pr) throw new Error(`pr ${prId} not found`);
+    return { ...getPrReviewConfig(prId), customized: prHasOwnSettings(prId) };
+  });
+
+  app.put("/api/prs/:prId/review-config", async (req) => {
+    const { prId } = z.object({ prId: z.coerce.number() }).parse(req.params);
+    const pr = getPRById(prId);
+    if (!pr) throw new Error(`pr ${prId} not found`);
+    const body = z
+      .object({
+        categories: z.array(z.string()).optional(),
+        strictness: z.string().optional(),
+        customRules: z.string().optional(),
+        pathInclude: z.string().optional(),
+        pathExclude: z.string().optional(),
+      })
+      .parse(req.body);
+    return { ...setPrReviewConfig(prId, body), customized: true };
+  });
+
+  app.delete("/api/prs/:prId/review-config", async (req) => {
+    const { prId } = z.object({ prId: z.coerce.number() }).parse(req.params);
+    const pr = getPRById(prId);
+    if (!pr) throw new Error(`pr ${prId} not found`);
+    return { ...resetPrReviewConfig(prId), customized: false };
+  });
+
+  // Preview the exact instruction block the model will receive. Reflects the
+  // (possibly unsaved) config in the body, merged with stored global/repo rules.
+  app.post("/api/prs/:prId/review-config/preview", async (req) => {
+    const { prId } = z.object({ prId: z.coerce.number() }).parse(req.params);
+    const pr = getPRById(prId);
+    if (!pr) throw new Error(`pr ${prId} not found`);
+    const body = z
+      .object({
+        categories: z.array(z.string()),
+        strictness: z.string(),
+        customRules: z.string().default(""),
+        pathInclude: z.string().default(""),
+        pathExclude: z.string().default(""),
+      })
+      .parse(req.body);
+    const instructions = buildReviewInstructions({
+      categories: body.categories,
+      strictness: body.strictness,
+      globalRules: getGlobalReviewConfig().customRules,
+      repoRules: getSkills(pr.repo_id),
+      perPrRules: body.customRules,
+      pathInclude: body.pathInclude,
+      pathExclude: body.pathExclude,
+    });
+    return { instructions };
   });
 
   app.get("/api/prs/:prId", async (req) => {

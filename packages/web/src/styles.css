@@ -1699,3 +1699,341 @@ a:focus-visible {
   color: var(--text);
   border-color: var(--border-strong);
 }
+
+/* ── Review settings: catalog editor, PR panel, presets ────────────────── */
+.review-settings-panel {
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  background: var(--bg-elev);
+  margin-bottom: 16px;
+  overflow: hidden;
+}
+.review-settings-panel.loading-stub {
+  height: 44px;
+  opacity: 0.5;
+}
+.rsp-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  padding: 11px 14px;
+  cursor: pointer;
+}
+.rsp-bar:hover {
+  background: var(--bg-hover);
+}
+.rsp-title {
+  font-weight: 600;
+  font-size: 13px;
+}
+.rsp-summary {
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 46ch;
+}
+.rsp-body {
+  padding: 4px 14px 16px;
+  border-top: 1px solid var(--border-soft);
+  animation: rise 0.3s cubic-bezier(0.16, 1, 0.3, 1) backwards;
+}
+.rsp-presets {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 0;
+}
+.rsp-preset-apply {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.rsp-preset-apply select,
+.preset-editor select {
+  background: var(--bg-inset);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: 5px 9px;
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.rsp-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 16px;
+  flex-wrap: wrap;
+}
+.rsp-save-preset {
+  display: inline-flex;
+  gap: 8px;
+  flex: 1;
+  min-width: 220px;
+  max-width: 360px;
+}
+.rsp-save-preset .rc-input {
+  flex: 1;
+}
+.rsp-preview {
+  margin-top: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-inset);
+}
+.rsp-preview > summary {
+  cursor: pointer;
+  padding: 9px 12px;
+  font-size: 12px;
+  color: var(--text-dim);
+  user-select: none;
+}
+.rsp-preview pre {
+  margin: 0;
+  padding: 12px 14px;
+  border-top: 1px solid var(--border-soft);
+  font-family: "Geist Mono", monospace;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--text-dim);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 420px;
+  overflow: auto;
+}
+
+/* Catalog editor (shared: PR panel, global defaults, presets) */
+.rc-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.rc-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.rc-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+.rc-categories {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.rc-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 11px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-inset);
+  color: var(--text-dim);
+  font-size: 12.5px;
+  cursor: pointer;
+  user-select: none;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease;
+}
+.rc-chip:hover:not(.disabled) {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+.rc-chip.on {
+  background: var(--accent-glow);
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  color: var(--text);
+}
+.rc-chip.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.rc-chip input {
+  width: 13px;
+  height: 13px;
+  accent-color: var(--accent);
+  margin: 0;
+}
+.rc-strictness {
+  display: inline-flex;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-inset);
+  width: fit-content;
+}
+.rc-strictness button {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  padding: 5px 14px;
+  border-radius: var(--r-xs);
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
+}
+.rc-strictness button:hover:not(:disabled) {
+  color: var(--text);
+}
+.rc-strictness button.active {
+  background: var(--bg-elev2);
+  color: var(--text);
+  box-shadow: var(--shadow-sm);
+}
+.rc-hint {
+  margin: 0;
+}
+.rc-textarea {
+  width: 100%;
+  min-height: 84px;
+  resize: vertical;
+  background: var(--bg-inset);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: 10px 12px;
+  font-family: "Geist Mono", monospace;
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+.rc-textarea:focus,
+.rc-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+.rc-input {
+  background: var(--bg-inset);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: 7px 11px;
+  font: inherit;
+  font-size: 13px;
+}
+.rc-paths {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+@media (max-width: 720px) {
+  .rc-paths {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Settings tabs */
+.settings-tabs {
+  display: inline-flex;
+  gap: 4px;
+  margin-bottom: 26px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0;
+}
+.settings-tabs button {
+  appearance: none;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 8px 14px;
+  cursor: pointer;
+  transition: color 0.15s ease;
+}
+.settings-tabs button:hover {
+  color: var(--text);
+}
+.settings-tabs button.active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+
+/* Presets management (settings) */
+.preset-list {
+  list-style: none;
+  margin: 0 0 14px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.preset-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 13px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-elev);
+}
+.preset-name {
+  font-weight: 600;
+  font-size: 13px;
+}
+.preset-editor {
+  margin-top: 14px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  background: var(--bg-elev);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* Save-as-rule action on AI comments */
+.comment-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+.comment-action {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: var(--bg-inset);
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 11px;
+  padding: 1px 8px;
+  border-radius: var(--r-xs);
+  cursor: pointer;
+  transition:
+    color 0.15s ease,
+    border-color 0.15s ease;
+}
+.comment-action:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+.comment-action.ghost {
+  border-color: transparent;
+  background: transparent;
+}
+.rule-scope {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}

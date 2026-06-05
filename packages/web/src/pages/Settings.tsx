@@ -1,7 +1,43 @@
 import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { api, type AppStatus, type Repo } from "../api.js";
+import { GlobalRulesTab } from "../components/GlobalRulesTab.js";
+
+type SettingsTab = "general" | "rules";
 
 export function Settings() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tab: SettingsTab = searchParams.get("tab") === "rules" ? "rules" : "general";
+  const setTab = (t: SettingsTab) =>
+    setSearchParams(t === "rules" ? { tab: "rules" } : {}, { replace: true });
+
+  return (
+    <div className="settings-page">
+      <h1>Settings</h1>
+      <div className="settings-tabs" role="tablist">
+        <button
+          role="tab"
+          aria-selected={tab === "general"}
+          className={tab === "general" ? "active" : ""}
+          onClick={() => setTab("general")}
+        >
+          General
+        </button>
+        <button
+          role="tab"
+          aria-selected={tab === "rules"}
+          className={tab === "rules" ? "active" : ""}
+          onClick={() => setTab("rules")}
+        >
+          Review rules
+        </button>
+      </div>
+      {tab === "rules" ? <GlobalRulesTab /> : <GeneralSettings />}
+    </div>
+  );
+}
+
+function GeneralSettings() {
   const [status, setStatus] = useState<AppStatus | null>(null);
   const [repos, setRepos] = useState<Repo[]>([]);
   const [saving, setSaving] = useState(false);
@@ -74,9 +110,7 @@ export function Settings() {
   if (!status) return <div className="loading">Loading…</div>;
 
   return (
-    <div className="settings-page">
-      <h1>Settings</h1>
-
+    <>
       <section>
         <h2>Repositories</h2>
         <p className="muted small">
@@ -189,6 +223,6 @@ export function Settings() {
           </code>
         </p>
       </section>
-    </div>
+    </>
   );
 }

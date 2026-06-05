@@ -4,6 +4,8 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { PatchDiff, type DiffLineAnnotation } from "@pierre/diffs/react";
 import { api, postSse, type PRDetail, type Thread } from "../api.js";
+import { ReviewSettingsPanel } from "../components/ReviewSettingsPanel.js";
+import type { ReviewConfigFields } from "../components/ReviewConfigEditor.js";
 import { splitPatchByFile, type PatchFile } from "../diff.js";
 import { sortFiles, statsForThreads, SEVERITY_RANK, NO_SEVERITY_RANK } from "../fileSort.js";
 import { getTheme, subscribeTheme, type Theme } from "../theme.js";
@@ -46,6 +48,7 @@ export function PRView() {
     error: null,
   });
   const [showLog, setShowLog] = useState(false);
+  const reviewConfigRef = useRef<ReviewConfigFields | null>(null);
 
   const load = useCallback(async () => {
     const [d, df] = await Promise.all([api.pr(id), api.diff(id)]);
@@ -197,6 +200,10 @@ export function PRView() {
     let result: StreamState["result"] = null;
     let error: string | null = null;
     try {
+      // Flush the latest panel config so the run uses exactly what's on screen.
+      if (reviewConfigRef.current) {
+        await api.savePrReviewConfig(id, reviewConfigRef.current);
+      }
       await postSse(`/api/prs/${id}/review`, {}, (ev) => {
         const data = ev.data as Record<string, unknown> | string | undefined;
         const pick = (key: string): string => {
@@ -239,6 +246,13 @@ export function PRView() {
 
   return (
     <div className="prview">
+      <ReviewSettingsPanel
+        prId={id}
+        disabled={stream.active}
+        onConfigChange={(c) => {
+          reviewConfigRef.current = c;
+        }}
+      />
       <header className="pr-header">
         <div className="pr-header-text">
           <Link to="/" className="back-link">
@@ -341,7 +355,7 @@ export function PRView() {
             <section className="pr-level-threads">
               <h3>PR-level threads</h3>
               {prLevel.map((t) => (
-                <ThreadCard key={t.id} thread={t} onChange={load} />
+                <ThreadCard key={t.id} thread={t} repoId={detail.repo.id} onChange={load} />
               ))}
             </section>
           )}
@@ -351,6 +365,7 @@ export function PRView() {
               <FileBlock
                 key={f.path}
                 file={f}
+                repoId={detail.repo.id}
                 registerRef={registerFileEl}
                 annotations={annByFile.get(f.path) ?? []}
                 fileThreads={fileLevelByFile.get(f.path) ?? []}
@@ -370,7 +385,7 @@ export function PRView() {
             <section className="resolved-section">
               <h3>Resolved ({resolved.length})</h3>
               {resolved.map((t) => (
-                <ThreadCard key={t.id} thread={t} onChange={load} compact />
+                <ThreadCard key={t.id} thread={t} repoId={detail.repo.id} onChange={load} compact />
               ))}
             </section>
           )}
@@ -603,6 +618,7 @@ function CollapsiblePrBody({ body }: { body: string }) {
 
 function FileBlock({
   file,
+  repoId,
   registerRef,
   annotations,
   fileThreads,
@@ -616,6 +632,7 @@ function FileBlock({
   onChange,
 }: {
   file: PatchFile;
+  repoId: number;
   registerRef: (path: string, el: HTMLElement | null) => void;
   annotations: LineThreads[];
   fileThreads: Thread[];
@@ -686,7 +703,7 @@ function FileBlock({
       {fileThreads.length > 0 && !collapsed && (
         <div className="file-threads">
           {fileThreads.map((t) => (
-            <ThreadCard key={t.id} thread={t} onChange={onChange} />
+            <ThreadCard key={t.id} thread={t} repoId={repoId} onChange={onChange} />
           ))}
         </div>
       )}
@@ -709,7 +726,7 @@ function FileBlock({
         renderAnnotation={(a) => (
           <div className="pierre-annotation">
             {a.metadata.map((t) => (
-              <ThreadCard key={t.id} thread={t} onChange={onChange} />
+              <ThreadCard key={t.id} thread={t} repoId={repoId} onChange={onChange} />
             ))}
           </div>
         )}
@@ -720,10 +737,12 @@ function FileBlock({
 
 function ThreadCard({
   thread,
+  repoId,
   onChange,
   compact = false,
 }: {
   thread: Thread;
+  repoId: number;
   onChange: () => void;
   compact?: boolean;
 }) {
@@ -774,7 +793,7 @@ function ThreadCard({
       </div>
       <div className="thread-comments">
         {thread.comments.map((c) => (
-          <CommentBlock key={c.id} comment={c} />
+          <CommentBlock key={c.id} comment={c} repoId={repoId} />
         ))}
       </div>
       {thread.status === "open" && (
@@ -798,8 +817,23 @@ function ThreadCard({
   );
 }
 
-function CommentBlock({ comment: c }: { comment: Thread["comments"][number] }) {
+function appendRule(existing: string, snippet: string): string {
+  const base = existing.trim();
+  const add = snippet.trim();
+  return base ? `${base}\n\n${add}` : add;
+}
+
+type RuleState = "idle" | "choosing" | "saving" | "saved";
+
+function CommentBlock({
+  comment: c,
+  repoId,
+}: {
+  comment: Thread["comments"][number];
+  repoId: number;
+}) {
   const [copied, setCopied] = useState(false);
+  const [ruleState, setRuleState] = useState<RuleState>("idle");
   const isAi = c.author === "ai";
   async function copy() {
     try {
@@ -810,6 +844,23 @@ function CommentBlock({ comment: c }: { comment: Thread["comments"][number] }) {
       console.error("clipboard write failed", e);
     }
   }
+  async function saveAsRule(scope: "global" | "repo") {
+    setRuleState("saving");
+    try {
+      if (scope === "repo") {
+        const { body } = await api.skills(repoId);
+        await api.saveSkills(repoId, appendRule(body, c.body));
+      } else {
+        const g = await api.globalReviewConfig();
+        await api.saveGlobalReviewConfig({ customRules: appendRule(g.customRules, c.body) });
+      }
+      setRuleState("saved");
+      setTimeout(() => setRuleState("idle"), 1800);
+    } catch (e) {
+      console.error("save as rule failed", e);
+      setRuleState("idle");
+    }
+  }
   return (
     <div className={`comment ${c.author} ${c.kind}`}>
       <div className="comment-header">
@@ -818,15 +869,55 @@ function CommentBlock({ comment: c }: { comment: Thread["comments"][number] }) {
           {c.kind !== "normal" ? ` · ${c.kind}` : ""}
         </span>
         {isAi && (
-          <button
-            type="button"
-            className="comment-copy"
-            onClick={copy}
-            title="Copy raw markdown of this comment"
-            aria-label="Copy comment markdown"
-          >
-            {copied ? "Copied" : "Copy"}
-          </button>
+          <span className="comment-actions">
+            {ruleState === "idle" && (
+              <button
+                type="button"
+                className="comment-action"
+                onClick={() => setRuleState("choosing")}
+                title="Save this finding as a reviewer rule (never written to the repo)"
+              >
+                Save as rule
+              </button>
+            )}
+            {ruleState === "choosing" && (
+              <span className="rule-scope">
+                <span className="muted small">Save to</span>
+                <button
+                  type="button"
+                  className="comment-action"
+                  onClick={() => void saveAsRule("global")}
+                >
+                  Global
+                </button>
+                <button
+                  type="button"
+                  className="comment-action"
+                  onClick={() => void saveAsRule("repo")}
+                >
+                  This repo
+                </button>
+                <button
+                  type="button"
+                  className="comment-action ghost"
+                  onClick={() => setRuleState("idle")}
+                >
+                  Cancel
+                </button>
+              </span>
+            )}
+            {ruleState === "saving" && <span className="muted small">Saving…</span>}
+            {ruleState === "saved" && <span className="ok small">Saved as rule ✓</span>}
+            <button
+              type="button"
+              className="comment-copy"
+              onClick={copy}
+              title="Copy raw markdown of this comment"
+              aria-label="Copy comment markdown"
+            >
+              {copied ? "Copied" : "Copy"}
+            </button>
+          </span>
         )}
       </div>
       <div className="comment-body">

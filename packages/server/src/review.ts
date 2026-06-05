@@ -14,6 +14,7 @@ import type {
   RevalidateContext,
 } from "./providers/types.js";
 import { getSkills } from "./skills.js";
+import { getPrReviewConfig, getGlobalReviewConfig } from "./reviewConfig.js";
 import * as gh from "./github.js";
 import { hydratePR } from "./prs.js";
 
@@ -45,6 +46,8 @@ export async function runReview(
   const diff = await gh.getPRDiff(repo.owner, repo.name, pr.number);
 
   const skills = getSkills(repo.id);
+  const prConfig = getPrReviewConfig(refreshed.id);
+  const globalConfig = getGlobalReviewConfig();
 
   const existingOpen = db
     .prepare(
@@ -90,6 +93,15 @@ export async function runReview(
       baseSha: refreshed.base_sha,
       diff,
       skills,
+      config: {
+        categories: prConfig.categories,
+        strictness: prConfig.strictness,
+        globalRules: globalConfig.customRules,
+        repoRules: skills,
+        perPrRules: prConfig.customRules,
+        pathInclude: prConfig.pathInclude,
+        pathExclude: prConfig.pathExclude,
+      },
       existingOpenThreads: existingOpen.map((t) => ({
         path: t.file_path,
         line: t.line,

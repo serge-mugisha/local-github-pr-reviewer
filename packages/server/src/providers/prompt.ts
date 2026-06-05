@@ -1,58 +1,116 @@
 import type { ReviewContext, ReplyContext, RevalidateContext } from "./types.js";
+import type { ReviewInstructionConfig } from "./types.js";
+import { CATEGORIES, getCategory, getStrictness } from "../reviewCatalog.js";
 
-const REVIEW_INSTRUCTIONS = `
+const PREAMBLE = `
 You are a local pull-request reviewer. You have full read access to the working
 copy at the current working directory. USE YOUR TOOLS: read changed files in
 full, grep for callers, look at tests, run quick commands. Investigate before
 commenting.
+`.trim();
 
-CRITICAL: default to saying NOTHING. Code is allowed to be imperfect. Your
-job is NOT to make this PR "better" — it's to catch things the author would
-genuinely thank you for catching. Most well-formed PRs should receive ZERO
-comments. An empty comments array is a valid, common, often correct result.
+const BASE_SUPPRESSIONS = [
+  "- Style, formatting, naming preferences, import order, whitespace.",
+  '- "Could be more elegant", "consider extracting", "this might be cleaner as".',
+  "- Missing tests for trivial code, missing docstrings, missing comments.",
+  "- Defensive checks for situations that cannot actually occur in this codebase.",
+  "- Hypothetical performance concerns that aren't on a hot path.",
+  "- Praise or general approval — return an empty array instead.",
+  "- Anything you wouldn't bring up if the author were sitting next to you and\n  had ten minutes to merge.",
+];
 
-ONLY comment when something falls into one of these categories:
-
-1. **Bugs**: the code will produce wrong behavior, crash, or fail to handle
-   a real (not hypothetical) case. Include enough specifics that the author
-   can verify the bug exists.
-2. **Regressions**: this change breaks behavior that previously worked, or
-   removes/weakens an existing guarantee (auth, validation, error handling,
-   contract with callers, test coverage of a real risk).
-3. **Security / data-integrity issues**: secrets, injection, missing
-   authz/authn checks, unsafe deserialization, race conditions on shared
-   state, broken transaction boundaries, etc.
-4. **Genuinely terrible patterns** (not merely "could be cleaner"): an
-   approach that will actively cause pain — quadratic loops on hot paths,
-   blocking I/O in the wrong place, swallowed exceptions that hide real
-   failures, a class hierarchy that already shows it cannot scale, etc.
-5. **Code duplication** that materially raises maintenance cost: the same
-   non-trivial logic copied across files such that future changes will go
-   out of sync. Trivial near-duplicates are NOT comment-worthy.
-6. **Violations of the repo-specific rules below** ("Reviewer rules for
-   this repo"). Treat those as the author's explicit asks — always flag.
-
-DO NOT comment on any of the following:
-- Style, formatting, naming preferences, import order, whitespace.
-- "Could be more elegant", "consider extracting", "this might be cleaner as".
-- Missing tests for trivial code, missing docstrings, missing comments.
-- Defensive checks for situations that cannot actually occur in this codebase.
-- Hypothetical performance concerns that aren't on a hot path.
-- Praise or general approval — return an empty array instead.
-- Anything you wouldn't bring up if the author were sitting next to you and
-  had ten minutes to merge.
-
-Severity scale (used in the JSON output):
-- "blocker": will break something real if merged.
-- "concern": a category 1–6 issue worth addressing but not strictly merge-blocking.
-- "nit":     reserved. Do not use unless the issue is concrete, takes <30
-             seconds to fix, and you'd still flag it if you had to defend it.
-- "praise":  do not use.
-
+const ANCHOR_INSTRUCTIONS = `
 Anchor each comment to a path + line in the NEW file (side="RIGHT") whenever
 possible. Use side="LEFT" only for comments about removed lines. If a comment
 is repo-wide and not line-specific, omit path and line.
 `.trim();
+
+function categoriesBlock(enabled: string[]): string {
+  // Preserve catalog order; ignore unknown keys.
+  const defs = CATEGORIES.filter((c) => enabled.includes(c.key));
+  if (defs.length === 0) {
+    return "(no categories selected — only flag violations of the explicit reviewer rules below)";
+  }
+  return defs.map((d, i) => `${i + 1}. ${d.fragment}`).join("\n");
+}
+
+function suppressionsBlock(enabled: string[]): string {
+  const unbanned = new Set<string>();
+  for (const key of enabled) getCategory(key)?.unbans?.forEach((u) => unbanned.add(u));
+  const kept = BASE_SUPPRESSIONS.filter((line) => !unbanned.has(line));
+  return kept.join("\n");
+}
+
+function severityScale(enabled: string[]): string {
+  const nitsOn = enabled.includes("nits");
+  const nitLine = nitsOn
+    ? '- "nit":     a concrete, low-effort style/cleanup item. Use freely — the author opted into nits.'
+    : `- "nit":     reserved. Do not use unless the issue is concrete, takes <30
+             seconds to fix, and you'd still flag it if you had to defend it.`;
+  return [
+    "Severity scale (used in the JSON output):",
+    '- "blocker": will break something real if merged.',
+    '- "concern": an enabled-category issue worth addressing but not strictly merge-blocking.',
+    nitLine,
+    '- "praise":  do not use.',
+  ].join("\n");
+}
+
+function scopeBlock(pathInclude: string, pathExclude: string): string {
+  const inc = pathInclude.trim();
+  const exc = pathExclude.trim();
+  if (!inc && !exc) return "";
+  const lines = ["# Scope"];
+  if (inc)
+    lines.push(
+      `- Review ONLY files whose path matches one of: ${inc}. Ignore changes outside these paths.`,
+    );
+  if (exc) lines.push(`- Do NOT comment on files whose path matches: ${exc}.`);
+  return lines.join("\n");
+}
+
+function rulesSection(cfg: ReviewInstructionConfig): string {
+  const blocks: string[] = [];
+  const add = (heading: string, body: string) => {
+    const t = body.trim();
+    if (t) blocks.push(`## ${heading}\n${t}`);
+  };
+  add("Global rules (apply to every PR)", cfg.globalRules);
+  add("Repo rules", cfg.repoRules);
+  add("This PR only", cfg.perPrRules);
+  if (blocks.length === 0) {
+    return "# Reviewer rules (follow these strictly)\n(none)";
+  }
+  return ["# Reviewer rules (follow these strictly)", ...blocks].join("\n\n");
+}
+
+/**
+ * Assembles the instruction header from a resolved config. Exposed so the UI
+ * can preview exactly what the model will be told before a review runs.
+ */
+export function buildReviewInstructions(cfg: ReviewInstructionConfig): string {
+  const strictness = getStrictness(cfg.strictness);
+  const parts = [
+    PREAMBLE,
+    "",
+    `CRITICAL: ${strictness.framing}`,
+    "",
+    "ONLY comment when something falls into one of these categories:",
+    "",
+    categoriesBlock(cfg.categories),
+    "",
+    "DO NOT comment on any of the following:",
+    suppressionsBlock(cfg.categories),
+    "",
+    severityScale(cfg.categories),
+  ];
+  const scope = scopeBlock(cfg.pathInclude, cfg.pathExclude);
+  if (scope) {
+    parts.push("", scope);
+  }
+  parts.push("", ANCHOR_INSTRUCTIONS);
+  return parts.join("\n");
+}
 
 const OUTPUT_INSTRUCTIONS = `
 At the very end of your response, return EXACTLY ONE fenced JSON code block
@@ -85,9 +143,8 @@ export function buildReviewPrompt(ctx: ReviewContext): string {
         )
         .join("\n")
     : "(none)";
-  const skills = ctx.skills.trim() || "(none)";
   return [
-    REVIEW_INSTRUCTIONS,
+    buildReviewInstructions(ctx.config),
     "",
     `# Repository`,
     `${ctx.repoSlug} @ ${ctx.headSha} (base ${ctx.baseSha})`,
@@ -95,8 +152,7 @@ export function buildReviewPrompt(ctx: ReviewContext): string {
     `# Pull request #${ctx.prNumber}: ${ctx.prTitle}`,
     ctx.prBody.trim() || "(no description)",
     "",
-    `# Reviewer rules for this repo (follow these strictly)`,
-    skills,
+    rulesSection(ctx.config),
     "",
     `# Existing open threads — do NOT duplicate these`,
     threads,

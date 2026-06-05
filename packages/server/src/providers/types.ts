@@ -12,6 +12,16 @@ export interface ReviewResult {
   rawOutput: string;
 }
 
+export interface ReviewInstructionConfig {
+  categories: string[]; // enabled category keys (see reviewCatalog)
+  strictness: string; // strictness key (see reviewCatalog)
+  globalRules: string; // custom rules applied to every PR
+  repoRules: string; // per-repo rules (the Skills page)
+  perPrRules: string; // custom rules for this PR only
+  pathInclude: string; // optional focus globs
+  pathExclude: string; // optional ignore globs
+}
+
 export interface ReviewContext {
   cwd: string; // local working copy of the repo
   prTitle: string;
@@ -22,6 +32,7 @@ export interface ReviewContext {
   baseSha: string;
   diff: string; // unified diff (may be chunked by caller)
   skills: string; // per-repo notes/rules markdown
+  config: ReviewInstructionConfig; // resolved review configuration
   existingOpenThreads: { path: string | null; line: number | null; summary: string }[];
 }
 
