@@ -1523,8 +1523,8 @@ a:focus-visible {
 /* ── No-issues banner ──────────────────────────────────────────────────── */
 .no-issues-banner {
   display: flex;
-  align-items: center;
-  gap: 12px;
+  flex-direction: column;
+  gap: 10px;
   padding: 14px 16px;
   margin-bottom: 16px;
   border: 1px solid color-mix(in srgb, var(--ok) 50%, var(--border));
@@ -1687,8 +1687,34 @@ a:focus-visible {
   border-radius: var(--r-lg);
 }
 .added-banner {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
   border: 1px solid color-mix(in srgb, var(--accent) 50%, var(--border));
   background: color-mix(in srgb, var(--accent) 8%, var(--bg-elev));
+}
+/* Header line inside the review-complete banners (glyph + status + dismiss). */
+.banner-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+/* The AI's PR summary, shown below the status line in the completion banners.
+   Its own neutral surface so the prose stays readable off the tinted banner. */
+.banner-summary {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: 11px 13px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text);
+}
+.banner-summary > :first-child {
+  margin-top: 0;
+}
+.banner-summary > :last-child {
+  margin-bottom: 0;
 }
 .added-banner-glyph {
   display: inline-flex;

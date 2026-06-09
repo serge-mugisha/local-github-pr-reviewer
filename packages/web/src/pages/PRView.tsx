@@ -345,6 +345,7 @@ export function PRView() {
             <AddedBanner
               addedThreads={stream.result!.addedThreads}
               staleMarked={stream.result!.staleMarked}
+              summary={detail.lastReview?.summary ?? null}
               onDismiss={() => setStream((s) => ({ ...s, result: null }))}
             />
           )}
@@ -543,33 +544,47 @@ function ReviewError({ message, onDismiss }: { message: string; onDismiss: () =>
   );
 }
 
+function ReviewSummary({ summary }: { summary: string | null | undefined }) {
+  if (!summary?.trim()) return null;
+  return (
+    <div className="banner-summary">
+      <Markdown>{summary}</Markdown>
+    </div>
+  );
+}
+
 function AddedBanner({
   addedThreads,
   staleMarked,
+  summary,
   onDismiss,
 }: {
   addedThreads: number;
   staleMarked: number;
+  summary: string | null;
   onDismiss: () => void;
 }) {
   const stalePart =
     staleMarked > 0 ? `, ${staleMarked} thread${staleMarked === 1 ? "" : "s"} marked stale` : "";
   return (
     <div className="added-banner" role="status">
-      <span className="added-banner-glyph" aria-hidden>
-        +
-      </span>
-      <div>
-        <strong>Review complete.</strong>
-        <div className="muted small">
-          Added {addedThreads} comment{addedThreads === 1 ? "" : "s"}
-          {stalePart}.
+      <div className="banner-row">
+        <span className="added-banner-glyph" aria-hidden>
+          +
+        </span>
+        <div>
+          <strong>Review complete.</strong>
+          <div className="muted small">
+            Added {addedThreads} comment{addedThreads === 1 ? "" : "s"}
+            {stalePart}.
+          </div>
         </div>
+        <div className="spacer" />
+        <button type="button" className="btn small ghost" onClick={onDismiss}>
+          Dismiss
+        </button>
       </div>
-      <div className="spacer" />
-      <button type="button" className="btn small ghost" onClick={onDismiss}>
-        Dismiss
-      </button>
+      <ReviewSummary summary={summary} />
     </div>
   );
 }
@@ -580,17 +595,20 @@ function NoIssuesBanner({ lastReview }: { lastReview: PRDetail["lastReview"] }) 
     : "earlier";
   return (
     <div className="no-issues-banner" role="status">
-      <span className="no-issues-glyph" aria-hidden>
-        ✓
-      </span>
-      <div>
-        <strong>No issues found.</strong>
-        <div className="muted small">
-          {lastReview
-            ? `Last review ran ${when} on ${lastReview.headSha.slice(0, 7)} via ${lastReview.provider}.`
-            : "No review has been recorded yet."}
+      <div className="banner-row">
+        <span className="no-issues-glyph" aria-hidden>
+          ✓
+        </span>
+        <div>
+          <strong>No issues found.</strong>
+          <div className="muted small">
+            {lastReview
+              ? `Last review ran ${when} on ${lastReview.headSha.slice(0, 7)} via ${lastReview.provider}.`
+              : "No review has been recorded yet."}
+          </div>
         </div>
       </div>
+      <ReviewSummary summary={lastReview?.summary} />
     </div>
   );
 }
