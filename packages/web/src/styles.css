@@ -506,6 +506,11 @@ pre {
   margin: 0;
   padding: 0;
 }
+/* Empty-state row — match the horizontal padding of .pr-row so the text
+   doesn't touch the card border. */
+.pr-empty {
+  padding: 14px 18px;
+}
 .pr-row {
   display: flex;
   align-items: center;
@@ -775,7 +780,11 @@ pre {
   border-radius: var(--r-lg);
   margin-bottom: 18px;
   background: var(--bg-elev);
-  overflow: hidden;
+  /* `clip` (not `hidden`) keeps the rounded-corner clipping WITHOUT turning
+     this card into a scroll container — `overflow: hidden` would, which makes
+     the sticky file header stick to the (non-scrolling) card instead of the
+     viewport and silently breaks it. */
+  overflow: clip;
   box-shadow: var(--shadow);
   transition: border-color 0.18s ease;
   animation: rise 0.45s cubic-bezier(0.16, 1, 0.3, 1) backwards;
@@ -794,6 +803,13 @@ pre {
   background: linear-gradient(180deg, var(--bg-elev2), var(--bg-elev));
   border-bottom: 1px solid var(--border);
   font-family: "Geist Mono", monospace;
+}
+/* Pin the sticky filename header below the app topbar (56px) + the sticky PR
+   header — same offset the files sidenav uses (124px). @pierre/diffs hardcodes
+   `top: 0`, which would tuck the header under those bars and hide it. */
+.pierre-diff [data-diffs-header][data-sticky] {
+  top: 124px;
+  z-index: 10;
 }
 
 /* "N open" count chip in the file header metadata slot. */

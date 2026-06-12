@@ -8,6 +8,9 @@ import type {
 import { buildReviewPrompt, buildReplyPrompt, buildRevalidatePrompt } from "./prompt.js";
 import { parseReviewOutput, parseRevalidateOutput } from "./parser.js";
 import { spawnCli, commandExists } from "./spawn.js";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { readdir, rm } from "node:fs/promises";
 
 /**
  * Runs `claude -p` inside the local working copy. The model brings its own
@@ -21,11 +24,16 @@ interface ClaudeJsonResult {
   session_id?: string;
 }
 
+interface ClaudeRun {
+  text: string;
+  sessionIds: string[];
+}
+
 async function runClaude(
   prompt: string,
   cwd: string,
   onProgress?: ProviderProgress,
-): Promise<string> {
+): Promise<ClaudeRun> {
   onProgress?.({ type: "log", data: `[claude] running in ${cwd}\n` });
   const args = ["-p", "--output-format", "json", "--permission-mode", "bypassPermissions"];
   const res = await spawnCli({
@@ -43,12 +51,54 @@ async function runClaude(
   try {
     const parsed = JSON.parse(res.stdout) as ClaudeJsonResult;
     if (parsed.is_error) throw new Error(parsed.error || "claude reported an error");
-    return parsed.result ?? "";
+    return {
+      text: parsed.result ?? "",
+      sessionIds: parsed.session_id ? [parsed.session_id] : [],
+    };
   } catch (e) {
     // If for some reason stdout isn't JSON, fall back to raw.
-    if (res.stdout.trim()) return res.stdout;
+    if (res.stdout.trim()) return { text: res.stdout, sessionIds: [] };
     throw new Error(`claude output not parseable: ${(e as Error).message}`);
   }
+}
+
+/**
+ * Claude Code persists each session as
+ * `~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`. Session ids are
+ * UUIDs, so we can locate the file by scanning every project dir without
+ * having to reproduce Claude's path-encoding scheme.
+ */
+async function deleteClaudeSessions(sessionIds: string[]): Promise<number> {
+  const wanted = new Set(sessionIds.filter(Boolean).map((id) => `${id}.jsonl`));
+  if (wanted.size === 0) return 0;
+  const projectsDir = join(homedir(), ".claude", "projects");
+  let dirs: string[];
+  try {
+    dirs = (await readdir(projectsDir, { withFileTypes: true }))
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name);
+  } catch {
+    return 0; // no projects dir → nothing to clean
+  }
+  let removed = 0;
+  for (const dir of dirs) {
+    let files: string[];
+    try {
+      files = await readdir(join(projectsDir, dir));
+    } catch {
+      continue;
+    }
+    for (const file of files) {
+      if (!wanted.has(file)) continue;
+      try {
+        await rm(join(projectsDir, dir, file), { force: true });
+        removed++;
+      } catch {
+        /* best-effort */
+      }
+    }
+  }
+  return removed;
 }
 
 export const claudeProvider: Provider = {
@@ -61,32 +111,38 @@ export const claudeProvider: Provider = {
 
   async review(ctx, onProgress) {
     const prompt = buildReviewPrompt(ctx);
-    const raw = await runClaude(prompt, ctx.cwd, onProgress);
-    const { summary, comments } = parseReviewOutput(raw);
-    return { summary, comments, rawOutput: raw } satisfies ReviewResult;
+    const { text, sessionIds } = await runClaude(prompt, ctx.cwd, onProgress);
+    const { summary, comments } = parseReviewOutput(text);
+    return { summary, comments, rawOutput: text, sessionIds } satisfies ReviewResult;
   },
 
   async reply(ctx, onProgress) {
     const prompt = buildReplyPrompt(ctx);
-    const raw = await runClaude(prompt, ctx.cwd, onProgress);
-    return { body: raw.trim(), rawOutput: raw } satisfies ReplyResult;
+    const { text, sessionIds } = await runClaude(prompt, ctx.cwd, onProgress);
+    return { body: text.trim(), rawOutput: text, sessionIds } satisfies ReplyResult;
   },
 
   async revalidate(ctx, onProgress) {
     const prompt = buildRevalidatePrompt(ctx);
-    const raw = await runClaude(prompt, ctx.cwd, onProgress);
-    const parsed = parseRevalidateOutput(raw);
+    const { text, sessionIds } = await runClaude(prompt, ctx.cwd, onProgress);
+    const parsed = parseRevalidateOutput(text);
     if (!parsed) {
       return {
         resolved: false,
-        body: raw.trim() || "Could not parse revalidation result.",
-        rawOutput: raw,
+        body: text.trim() || "Could not parse revalidation result.",
+        rawOutput: text,
+        sessionIds,
       };
     }
     return {
       resolved: parsed.resolved,
       body: parsed.explanation,
-      rawOutput: raw,
+      rawOutput: text,
+      sessionIds,
     } satisfies RevalidateResult;
+  },
+
+  async deleteSessions(sessionIds) {
+    return deleteClaudeSessions(sessionIds);
   },
 };

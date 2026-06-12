@@ -17,6 +17,7 @@ import { getSkills } from "./skills.js";
 import { getPrReviewConfig, getGlobalReviewConfig } from "./reviewConfig.js";
 import * as gh from "./github.js";
 import { hydratePR } from "./prs.js";
+import { recordSessions } from "./sessions.js";
 
 function now(): string {
   return new Date().toISOString();
@@ -110,6 +111,7 @@ export async function runReview(
     };
 
     const result = await provider.review(ctx, onProgress);
+    recordSessions(refreshed.id, providerId, result.sessionIds, repo.local_path);
 
     // Dedupe + insert
     const existingFps = new Set(
@@ -202,6 +204,7 @@ export async function runReply(args: ReplyArgs): Promise<{ aiCommentId: number }
   };
 
   const result = await provider.reply(ctx, onProgress);
+  recordSessions(pr.id, providerId, result.sessionIds, repo.local_path);
 
   const aiCommentId = Number(
     db
@@ -256,6 +259,7 @@ export async function runRevalidate(
   };
 
   const result = await provider.revalidate(ctx, onProgress);
+  recordSessions(refreshed.id, providerId, result.sessionIds, repo.local_path);
 
   // Mark thread fresh on this sha (no longer stale) regardless of result.
   db.prepare("UPDATE threads SET stale = 0, last_seen_sha = ? WHERE id = ?").run(

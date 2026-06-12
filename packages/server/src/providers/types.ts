@@ -10,6 +10,9 @@ export interface ReviewResult {
   summary: string;
   comments: ReviewComment[];
   rawOutput: string;
+  /** Chat session id(s) the CLI persisted for this run, if any. Tracked so
+   *  they can be deleted when the PR is purged. */
+  sessionIds?: string[];
 }
 
 export interface ReviewInstructionConfig {
@@ -64,11 +67,13 @@ export interface RevalidateResult {
   resolved: boolean;
   body: string; // explanation: why resolved, or what's still missing
   rawOutput: string;
+  sessionIds?: string[];
 }
 
 export interface ReplyResult {
   body: string;
   rawOutput: string;
+  sessionIds?: string[];
 }
 
 export interface ProviderProgress {
@@ -82,4 +87,7 @@ export interface Provider {
   review(ctx: ReviewContext, onProgress?: ProviderProgress): Promise<ReviewResult>;
   reply(ctx: ReplyContext, onProgress?: ProviderProgress): Promise<ReplyResult>;
   revalidate(ctx: RevalidateContext, onProgress?: ProviderProgress): Promise<RevalidateResult>;
+  /** Delete the on-disk chat sessions this provider persisted for the given
+   *  session ids (run in `cwd`). Returns how many sessions were removed. */
+  deleteSessions?(sessionIds: string[], cwd: string): Promise<number>;
 }

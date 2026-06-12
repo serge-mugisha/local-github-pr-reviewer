@@ -115,7 +115,7 @@ export function Home() {
               </li>
             ))}
             {(prs[repo.id]?.length ?? 0) === 0 && (
-              <li className="muted">No PRs cached. Click Refresh PRs.</li>
+              <li className="pr-empty muted">No PRs cached. Click Refresh PRs.</li>
             )}
           </ul>
         </section>

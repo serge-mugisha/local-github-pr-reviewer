@@ -1,5 +1,6 @@
 import { getDb, type PrRow, type RepoRow, type ThreadRow, type CommentRow } from "./db.js";
 import * as gh from "./github.js";
+import { purgeSessionsForPrs } from "./sessions.js";
 
 export interface PrListItem {
   id: number;
@@ -120,10 +121,19 @@ export function listThreadsForPR(prId: number): (ThreadRow & { comments: Comment
   return threads.map((t) => ({ ...t, comments: getComments.all(t.id) as CommentRow[] }));
 }
 
-export function cleanupClosedPRs(repo: RepoRow, closedNumbers: number[]): number {
+export async function cleanupClosedPRs(repo: RepoRow, closedNumbers: number[]): Promise<number> {
   if (closedNumbers.length === 0) return 0;
   const db = getDb();
   const placeholders = closedNumbers.map(() => "?").join(",");
+  // Delete the AI chat sessions tied to these PRs before the rows (and their
+  // cascading ai_sessions rows) are gone, so review sessions don't linger in
+  // the user's Claude/Gemini history.
+  const prIds = (
+    db
+      .prepare(`SELECT id FROM prs WHERE repo_id = ? AND number IN (${placeholders})`)
+      .all(repo.id, ...closedNumbers) as { id: number }[]
+  ).map((r) => r.id);
+  await purgeSessionsForPrs(prIds);
   const result = db
     .prepare(`DELETE FROM prs WHERE repo_id = ? AND number IN (${placeholders})`)
     .run(repo.id, ...closedNumbers);
@@ -140,12 +150,14 @@ export async function purgeClosedForRepo(repo: RepoRow): Promise<number> {
 }
 
 /** Wipe reviews, threads, and comments for a PR. PR row is retained so the
- *  user can immediately run a fresh review. */
-export function clearReviewData(prId: number): {
+ *  user can immediately run a fresh review. Also deletes the AI chat sessions
+ *  from that review so a re-run doesn't accumulate stale sessions. */
+export async function clearReviewData(prId: number): Promise<{
   threads: number;
   comments: number;
   reviews: number;
-} {
+}> {
+  await purgeSessionsForPrs([prId]);
   const db = getDb();
   const tx = db.transaction(() => {
     const comments = db

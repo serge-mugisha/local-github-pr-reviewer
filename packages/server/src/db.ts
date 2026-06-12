@@ -125,9 +125,24 @@ function migrate(db: Database.Database): void {
       updated_at TEXT NOT NULL
     );
 
+    -- AI CLI chat sessions spawned while reviewing/replying on a PR. The
+    -- provider CLIs (Claude, Gemini) persist a conversation per invocation in
+    -- the user's home dir; we track them here so they can be deleted when the
+    -- PR is purged, keeping the user's real coding sessions uncluttered.
+    CREATE TABLE IF NOT EXISTS ai_sessions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      pr_id INTEGER NOT NULL REFERENCES prs(id) ON DELETE CASCADE,
+      provider TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      cwd TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      UNIQUE(pr_id, provider, session_id)
+    );
+
     CREATE INDEX IF NOT EXISTS idx_threads_pr ON threads(pr_id);
     CREATE INDEX IF NOT EXISTS idx_comments_thread ON comments(thread_id);
     CREATE INDEX IF NOT EXISTS idx_prs_repo ON prs(repo_id);
+    CREATE INDEX IF NOT EXISTS idx_ai_sessions_pr ON ai_sessions(pr_id);
   `);
 }
 
@@ -185,6 +200,14 @@ export interface CommentRow {
   body: string;
   head_sha: string;
   kind: string;
+  created_at: string;
+}
+export interface AiSessionRow {
+  id: number;
+  pr_id: number;
+  provider: string;
+  session_id: string;
+  cwd: string;
   created_at: string;
 }
 export interface SkillsRow {

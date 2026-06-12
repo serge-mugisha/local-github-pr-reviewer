@@ -19,6 +19,7 @@ import {
   clearReviewData,
 } from "./prs.js";
 import { getSkills, setSkills } from "./skills.js";
+import { purgeSessionsForPrs } from "./sessions.js";
 import {
   getGlobalReviewConfig,
   setGlobalReviewConfig,
@@ -107,6 +108,12 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     const { repoId } = z.object({ repoId: z.coerce.number() }).parse(req.params);
     const repo = requireRepo(repoId);
     const nextCfg = removeRepoFromConfig(repo.owner, repo.name);
+    // Delete AI chat sessions for this repo's PRs before the cascade removes
+    // the tracking rows, so review sessions don't linger in CLI history.
+    const prIds = (
+      getDb().prepare("SELECT id FROM prs WHERE repo_id = ?").all(repoId) as { id: number }[]
+    ).map((r) => r.id);
+    await purgeSessionsForPrs(prIds);
     // Drop the repo row (cascades to PRs, threads, comments, skills).
     getDb().prepare("DELETE FROM repos WHERE id = ?").run(repoId);
     return { removed: { owner: repo.owner, name: repo.name }, remaining: nextCfg.repos.length };
