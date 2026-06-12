@@ -804,13 +804,11 @@ pre {
   border-bottom: 1px solid var(--border);
   font-family: "Geist Mono", monospace;
 }
-/* Pin the sticky filename header below the app topbar (56px) + the sticky PR
-   header — same offset the files sidenav uses (124px). @pierre/diffs hardcodes
-   `top: 0`, which would tuck the header under those bars and hide it. */
-.pierre-diff [data-diffs-header][data-sticky] {
-  top: 124px;
-  z-index: 10;
-}
+/* NOTE: the sticky offset for the file header lives in PRView's `unsafeCSS`
+   option — the header renders inside @pierre/diffs' shadow DOM, so a rule
+   here can't reach it. The `overflow: clip` on .file-block above is what lets
+   it stick at all (vs. `overflow: hidden`, which makes the card a scroll
+   container and kills sticky positioning). */
 
 /* "N open" count chip in the file header metadata slot. */
 .file-badge {
@@ -1316,7 +1314,9 @@ a:focus-visible {
 
 .pr-sidenav {
   position: sticky;
-  top: 124px;
+  /* Same offset as the diff's sticky file headers (topbar + PR header),
+     measured into --diff-sticky-top by PRView. */
+  top: var(--diff-sticky-top, 124px);
   max-height: calc(100vh - 140px);
   overflow: auto;
   border: 1px solid var(--border);

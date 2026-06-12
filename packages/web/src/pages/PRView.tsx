@@ -173,6 +173,29 @@ export function PRView() {
     [id],
   );
 
+  // The diff's sticky file headers must pin just below the topbar + sticky PR
+  // header. The PR header height varies with the title, so we measure it and
+  // expose the offset as a CSS variable (custom props inherit through the
+  // diff's shadow DOM, where the sticky `top` is applied via unsafeCSS).
+  const prHeaderRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const el = prHeaderRef.current;
+    if (!el) return;
+    const root = document.documentElement;
+    const update = () => {
+      const topbarH = (document.querySelector(".topbar") as HTMLElement | null)?.offsetHeight ?? 56;
+      root.style.setProperty("--diff-sticky-top", `${topbarH + el.offsetHeight}px`);
+    };
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    window.addEventListener("resize", update);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", update);
+    };
+  }, [detail]);
+
   // File anchors for sidenav jump.
   const fileRefs = useRef<Map<string, HTMLElement>>(new Map());
   const registerFileEl = useCallback((path: string, el: HTMLElement | null) => {
@@ -254,7 +277,7 @@ export function PRView() {
           reviewConfigRef.current = c;
         }}
       />
-      <header className="pr-header">
+      <header className="pr-header" ref={prHeaderRef}>
         <div className="pr-header-text">
           <Link to="/" className="back-link">
             ← All PRs
@@ -398,6 +421,13 @@ export function PRView() {
 }
 
 const PIERRE_THEME = { dark: "pierre-dark", light: "pierre-light" } as const;
+
+// The diff renders inside @pierre/diffs' shadow DOM, so our stylesheet can't
+// reach the sticky file header (it ships `top: 0`, which tucks the header
+// under our sticky topbar + PR header). `unsafeCSS` is injected into the
+// shadow root's highest cascade layer, so this override wins. 124px matches
+// the files sidenav offset (56px topbar + the sticky PR header).
+const STICKY_HEADER_CSS = "[data-diffs-header][data-sticky]{top:var(--diff-sticky-top,124px)}";
 
 function topOpenSeverity(threads: Thread[]): { rank: number; severity: string | null } {
   let rank = NO_SEVERITY_RANK;
@@ -737,6 +767,7 @@ function FileBlock({
           lineDiffType: "word",
           overflow: "wrap",
           stickyHeader: true,
+          unsafeCSS: STICKY_HEADER_CSS,
           collapsed,
         }}
         lineAnnotations={annotations}
