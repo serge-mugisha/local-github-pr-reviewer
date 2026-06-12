@@ -64,11 +64,12 @@ async function runClaude(
 
 /**
  * Claude Code persists each session as
- * `~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`. Session ids are
- * UUIDs, so we can locate the file by scanning every project dir without
- * having to reproduce Claude's path-encoding scheme.
+ * `~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`, where the directory
+ * is the cwd with non-alphanumeric chars replaced by `-`. We check that
+ * project dir first, then fall back to other dirs in case the encoding
+ * differs (session ids are UUIDs, so the filename match stays unambiguous).
  */
-async function deleteClaudeSessions(sessionIds: string[]): Promise<number> {
+async function deleteClaudeSessions(sessionIds: string[], cwd: string): Promise<number> {
   const wanted = new Set(sessionIds.filter(Boolean).map((id) => `${id}.jsonl`));
   if (wanted.size === 0) return 0;
   const projectsDir = join(homedir(), ".claude", "projects");
@@ -80,8 +81,11 @@ async function deleteClaudeSessions(sessionIds: string[]): Promise<number> {
   } catch {
     return 0; // no projects dir → nothing to clean
   }
+  const preferred = cwd.replace(/[^a-zA-Z0-9]/g, "-");
+  dirs.sort((a, b) => (a === preferred ? -1 : b === preferred ? 1 : 0));
   let removed = 0;
   for (const dir of dirs) {
+    if (wanted.size === 0) break; // found them all
     let files: string[];
     try {
       files = await readdir(join(projectsDir, dir));
@@ -93,6 +97,7 @@ async function deleteClaudeSessions(sessionIds: string[]): Promise<number> {
       try {
         await rm(join(projectsDir, dir, file), { force: true });
         removed++;
+        wanted.delete(file);
       } catch {
         /* best-effort */
       }
@@ -142,7 +147,7 @@ export const claudeProvider: Provider = {
     } satisfies RevalidateResult;
   },
 
-  async deleteSessions(sessionIds) {
-    return deleteClaudeSessions(sessionIds);
+  async deleteSessions(sessionIds, cwd) {
+    return deleteClaudeSessions(sessionIds, cwd);
   },
 };
