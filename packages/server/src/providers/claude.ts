@@ -48,18 +48,24 @@ async function runClaude(
     throw new Error(`claude exited ${res.exitCode}: ${res.stderr.slice(0, 500)}`);
   }
   // With --output-format json, stdout is a JSON object containing `result`.
+  // Parse first; check is_error *after* the catch so a reported error isn't
+  // swallowed and mistaken for successful output.
+  let parsed: ClaudeJsonResult | null = null;
   try {
-    const parsed = JSON.parse(res.stdout) as ClaudeJsonResult;
+    parsed = JSON.parse(res.stdout) as ClaudeJsonResult;
+  } catch {
+    parsed = null;
+  }
+  if (parsed) {
     if (parsed.is_error) throw new Error(parsed.error || "claude reported an error");
     return {
       text: parsed.result ?? "",
       sessionIds: parsed.session_id ? [parsed.session_id] : [],
     };
-  } catch (e) {
-    // If for some reason stdout isn't JSON, fall back to raw.
-    if (res.stdout.trim()) return { text: res.stdout, sessionIds: [] };
-    throw new Error(`claude output not parseable: ${(e as Error).message}`);
   }
+  // Not JSON for some reason — fall back to raw stdout (no id to track).
+  if (res.stdout.trim()) return { text: res.stdout, sessionIds: [] };
+  throw new Error("claude output not parseable");
 }
 
 /**
