@@ -1,39 +1,48 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, type AppStatus, type PRListItem, type Repo } from "../api.js";
+import { AddRepoPanel } from "../components/AddRepoPanel.js";
 
 export function Home() {
   const [status, setStatus] = useState<AppStatus | null>(null);
   const [repos, setRepos] = useState<Repo[]>([]);
   const [prs, setPrs] = useState<Record<number, PRListItem[]>>({});
   const [loading, setLoading] = useState<Record<number, boolean>>({});
+  const [showAddRepo, setShowAddRepo] = useState(false);
+  const [collapsedRepos, setCollapsedRepos] = useState<Record<number, boolean>>({});
+
+  async function loadRepos() {
+    const r = await api.repos();
+    setRepos(r);
+    setCollapsedRepos((current) =>
+      Object.fromEntries(r.map((repo) => [repo.id, current[repo.id] ?? false])),
+    );
+    // For each repo: show cached PRs immediately, then trigger a refresh
+    // in the background so the list converges to whatever's actually open
+    // on GitHub. Refresh empty repos eagerly (no cache to show first).
+    await Promise.all(
+      r.map(async (repo) => {
+        const cached = await api.prs(repo.id);
+        setPrs((p) => ({ ...p, [repo.id]: cached }));
+        setLoading((l) => ({ ...l, [repo.id]: true }));
+        try {
+          const fresh = await api.refreshPRs(repo.id);
+          setPrs((p) => ({ ...p, [repo.id]: fresh }));
+        } catch (e) {
+          console.error(`refresh failed for ${repo.owner}/${repo.name}:`, e);
+        } finally {
+          setLoading((l) => ({ ...l, [repo.id]: false }));
+        }
+      }),
+    );
+  }
 
   useEffect(() => {
     api
       .status()
       .then(setStatus)
       .catch((e) => console.error(e));
-    api.repos().then(async (r) => {
-      setRepos(r);
-      // For each repo: show cached PRs immediately, then trigger a refresh
-      // in the background so the list converges to whatever's actually open
-      // on GitHub. Refresh empty repos eagerly (no cache to show first).
-      await Promise.all(
-        r.map(async (repo) => {
-          const cached = await api.prs(repo.id);
-          setPrs((p) => ({ ...p, [repo.id]: cached }));
-          setLoading((l) => ({ ...l, [repo.id]: true }));
-          try {
-            const fresh = await api.refreshPRs(repo.id);
-            setPrs((p) => ({ ...p, [repo.id]: fresh }));
-          } catch (e) {
-            console.error(`refresh failed for ${repo.owner}/${repo.name}:`, e);
-          } finally {
-            setLoading((l) => ({ ...l, [repo.id]: false }));
-          }
-        }),
-      );
-    });
+    void loadRepos();
   }, []);
 
   async function refresh(repoId: number) {
@@ -46,10 +55,23 @@ export function Home() {
     }
   }
 
+  async function handleRepoAdded() {
+    await loadRepos();
+    setShowAddRepo(false);
+  }
+
   return (
     <div className="home">
       <header className="home-header">
         <h1>Pull requests</h1>
+        <div className="spacer" />
+        <button
+          className="btn primary"
+          onClick={() => setShowAddRepo((v) => !v)}
+          aria-expanded={showAddRepo}
+        >
+          Add repo
+        </button>
         {status && (
           <div className="status-strip">
             <span className={`pill ${status.gh.ok ? "ok" : "warn"}`}>
@@ -68,58 +90,67 @@ export function Home() {
         )}
       </header>
 
+      {showAddRepo && <AddRepoPanel onAdded={handleRepoAdded} />}
+
       {repos.length === 0 && (
         <div className="empty">
-          <p>
-            No repos configured. Edit <code>config.json</code> in the project root:
-          </p>
-          <pre>{`{
-  "provider": "claude",
-  "port": 47823,
-  "repos": [
-    { "owner": "your-user", "name": "your-repo", "localPath": "/abs/path/to/clone" }
-  ]
-}`}</pre>
+          <p>No repos configured. Use Add repo to choose a local clone and detect it.</p>
         </div>
       )}
 
-      {repos.map((repo) => (
-        <section key={repo.id} className="repo-section">
-          <div className="repo-header">
-            <h2>
-              {repo.owner}/{repo.name}
-            </h2>
-            <span className="muted small">{repo.localPath}</span>
-            <div className="spacer" />
-            <Link to={`/repos/${repo.id}/skills`} className="btn">
-              Skills
-            </Link>
-            <button className="btn" onClick={() => refresh(repo.id)} disabled={loading[repo.id]}>
-              {loading[repo.id] ? "Refreshing…" : "Refresh PRs"}
-            </button>
-          </div>
-          <ul className="pr-list">
-            {(prs[repo.id] ?? []).map((p) => (
-              <li key={p.id} className="pr-row">
-                <span className="pr-num">#{p.number}</span>
-                <Link to={`/pr/${p.id}`} className="pr-title">
-                  {p.title}
-                </Link>
-                <span className="branch">
-                  {p.headRef} → {p.baseRef}
-                </span>
-                {p.author && <span className="muted small">{p.author}</span>}
-                <div className="spacer" />
-                {p.hasReview && <span className="pill ok">reviewed</span>}
-                {p.openThreads > 0 && <span className="pill">{p.openThreads} open</span>}
-              </li>
-            ))}
-            {(prs[repo.id]?.length ?? 0) === 0 && (
-              <li className="pr-empty muted">No PRs cached. Click Refresh PRs.</li>
+      {repos.map((repo) => {
+        const isCollapsed = collapsedRepos[repo.id] ?? false;
+        const repoPrs = prs[repo.id] ?? [];
+        return (
+          <section key={repo.id} className={`repo-section ${isCollapsed ? "collapsed" : ""}`}>
+            <div className="repo-header">
+              <button
+                className="btn small icon-btn collapse-toggle"
+                onClick={() => setCollapsedRepos((c) => ({ ...c, [repo.id]: !isCollapsed }))}
+                aria-expanded={!isCollapsed}
+                aria-label={`${isCollapsed ? "Expand" : "Collapse"} ${repo.owner}/${repo.name}`}
+                title={isCollapsed ? "Expand repo" : "Collapse repo"}
+              >
+                {isCollapsed ? "▸" : "▾"}
+              </button>
+              <h2>
+                {repo.owner}/{repo.name}
+              </h2>
+              <span className="pill">{repoPrs.length} PRs</span>
+              <span className="muted small">{repo.localPath}</span>
+              <div className="spacer" />
+              <Link to={`/repos/${repo.id}/skills`} className="btn">
+                Skills
+              </Link>
+              <button className="btn" onClick={() => refresh(repo.id)} disabled={loading[repo.id]}>
+                {loading[repo.id] ? "Refreshing…" : "Refresh PRs"}
+              </button>
+            </div>
+            {!isCollapsed && (
+              <ul className="pr-list">
+                {repoPrs.map((p) => (
+                  <li key={p.id} className="pr-row">
+                    <span className="pr-num">#{p.number}</span>
+                    <Link to={`/pr/${p.id}`} className="pr-title">
+                      {p.title}
+                    </Link>
+                    <span className="branch">
+                      {p.headRef} → {p.baseRef}
+                    </span>
+                    {p.author && <span className="muted small">{p.author}</span>}
+                    <div className="spacer" />
+                    {p.hasReview && <span className="pill ok">reviewed</span>}
+                    {p.openThreads > 0 && <span className="pill">{p.openThreads} open</span>}
+                  </li>
+                ))}
+                {repoPrs.length === 0 && (
+                  <li className="pr-empty muted">No PRs cached. Click Refresh PRs.</li>
+                )}
+              </ul>
             )}
-          </ul>
-        </section>
-      ))}
+          </section>
+        );
+      })}
     </div>
   );
 }

@@ -364,6 +364,13 @@ pre {
   padding: 4px 9px;
   font-size: 12px;
 }
+.btn.icon-btn {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  font-family: "Geist Mono", monospace;
+  font-size: 15px;
+}
 .btn.danger {
   color: var(--blocker);
   border-color: color-mix(in srgb, var(--blocker) 36%, var(--border));
@@ -455,6 +462,9 @@ pre {
   flex-wrap: wrap;
   align-items: center;
 }
+.home > .add-repo {
+  margin-bottom: 20px;
+}
 .home > section {
   animation: rise 0.5s cubic-bezier(0.16, 1, 0.3, 1) backwards;
 }
@@ -475,6 +485,9 @@ pre {
   background: var(--bg-elev);
   overflow: hidden;
   box-shadow: var(--shadow);
+}
+.repo-section.collapsed {
+  background: var(--bg-elev);
 }
 .repo-header {
   display: flex;
@@ -500,6 +513,9 @@ pre {
 .repo-header .muted.small {
   font-family: "Geist Mono", monospace;
   font-size: 11.5px;
+}
+.collapse-toggle {
+  flex: 0 0 auto;
 }
 .pr-list {
   list-style: none;
@@ -1182,6 +1198,13 @@ pre {
   border-radius: var(--r-lg);
   padding: 18px;
   background: var(--bg-elev);
+}
+.add-repo-row {
+  align-items: stretch;
+  flex-wrap: wrap;
+}
+.add-repo-row .path-input {
+  min-width: min(100%, 320px);
 }
 .path-input {
   flex: 1;

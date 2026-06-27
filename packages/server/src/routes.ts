@@ -9,6 +9,7 @@ import {
   type RepoRow,
 } from "./db.js";
 import { addRepoToConfig, removeRepoFromConfig } from "./config.js";
+import { pickFolder } from "./folderPicker.js";
 import { detectRepo } from "./repoDetect.js";
 import {
   listPRsForRepo,
@@ -87,6 +88,10 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       name: r.name,
       localPath: r.local_path,
     }));
+  });
+
+  app.post("/api/repos/pick-folder", async () => {
+    return { localPath: await pickFolder() };
   });
 
   app.post("/api/repos/detect", async (req) => {

@@ -149,6 +149,8 @@ async function jsonReq<T>(url: string, init?: RequestInit): Promise<T> {
 export const api = {
   status: () => jsonReq<AppStatus>("/api/status"),
   repos: () => jsonReq<Repo[]>("/api/repos"),
+  pickRepoFolder: () =>
+    jsonReq<{ localPath: string | null }>("/api/repos/pick-folder", { method: "POST" }),
   detectRepo: (localPath: string) =>
     jsonReq<{ owner: string; name: string; localPath: string }>("/api/repos/detect", {
       method: "POST",

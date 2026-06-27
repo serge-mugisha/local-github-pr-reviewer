@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api, type AppStatus, type Repo } from "../api.js";
+import { AddRepoPanel } from "../components/AddRepoPanel.js";
 import { GlobalRulesTab } from "../components/GlobalRulesTab.js";
 
 type SettingsTab = "general" | "rules";
@@ -42,14 +43,6 @@ function GeneralSettings() {
   const [repos, setRepos] = useState<Repo[]>([]);
   const [saving, setSaving] = useState(false);
 
-  const [newPath, setNewPath] = useState("");
-  const [detect, setDetect] = useState<{ owner: string; name: string; localPath: string } | null>(
-    null,
-  );
-  const [detectError, setDetectError] = useState<string>("");
-  const [detecting, setDetecting] = useState(false);
-  const [adding, setAdding] = useState(false);
-
   async function refresh() {
     const [s, r] = await Promise.all([api.status(), api.repos()]);
     setStatus(s);
@@ -67,34 +60,6 @@ function GeneralSettings() {
       await refresh();
     } finally {
       setSaving(false);
-    }
-  }
-
-  async function doDetect() {
-    setDetecting(true);
-    setDetectError("");
-    setDetect(null);
-    try {
-      const d = await api.detectRepo(newPath.trim());
-      setDetect(d);
-    } catch (e) {
-      setDetectError((e as Error).message);
-    } finally {
-      setDetecting(false);
-    }
-  }
-
-  async function doAdd() {
-    setAdding(true);
-    try {
-      await api.addRepo(newPath.trim());
-      setNewPath("");
-      setDetect(null);
-      await refresh();
-    } catch (e) {
-      setDetectError((e as Error).message);
-    } finally {
-      setAdding(false);
     }
   }
 
@@ -135,47 +100,7 @@ function GeneralSettings() {
           {repos.length === 0 && <li className="muted">No repos yet — add one below.</li>}
         </ul>
 
-        <div className="add-repo">
-          <h3>Add a repo</h3>
-          <div className="row">
-            <input
-              type="text"
-              className="path-input"
-              value={newPath}
-              placeholder="/absolute/path/to/your/clone"
-              onChange={(e) => {
-                setNewPath(e.target.value);
-                setDetect(null);
-                setDetectError("");
-              }}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") void doDetect();
-              }}
-            />
-            <button className="btn" onClick={doDetect} disabled={detecting || !newPath.trim()}>
-              {detecting ? "Detecting…" : "Detect"}
-            </button>
-          </div>
-          {detectError && <p className="warn small">{detectError}</p>}
-          {detect && (
-            <div className="detect-result">
-              <p className="ok small">
-                Detected{" "}
-                <strong>
-                  {detect.owner}/{detect.name}
-                </strong>{" "}
-                at <code className="mono">{detect.localPath}</code>
-              </p>
-              <button className="btn primary" onClick={doAdd} disabled={adding}>
-                {adding ? "Adding…" : "Add this repo"}
-              </button>
-            </div>
-          )}
-          <p className="muted small">
-            Tip: in a Finder window, hold Option and right-click a folder to copy its path, or drag
-            a folder into Terminal to print it.
-          </p>
-        </div>
+        <AddRepoPanel onAdded={refresh} />
       </section>
 
       <section>
