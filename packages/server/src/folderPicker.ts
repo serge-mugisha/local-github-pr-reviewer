@@ -5,6 +5,18 @@ interface CommandResult {
   stderr: string;
 }
 
+class CommandError extends Error {
+  constructor(
+    message: string,
+    readonly command: string,
+    readonly code: number | null,
+    readonly stdout: string,
+    readonly stderr: string,
+  ) {
+    super(message);
+  }
+}
+
 function run(command: string, args: string[]): Promise<CommandResult> {
   return new Promise((resolveP, rejectP) => {
     const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
@@ -14,7 +26,15 @@ function run(command: string, args: string[]): Promise<CommandResult> {
     child.stderr.on("data", (b) => (stderr += b.toString()));
     child.on("close", (code) => {
       if (code !== 0) {
-        rejectP(new Error(stderr.trim() || `${command} exited ${code}`));
+        rejectP(
+          new CommandError(
+            stderr.trim() || `${command} exited ${code}`,
+            command,
+            code,
+            stdout,
+            stderr,
+          ),
+        );
         return;
       }
       resolveP({ stdout, stderr });
@@ -25,6 +45,16 @@ function run(command: string, args: string[]): Promise<CommandResult> {
 
 function isCancelMessage(message: string): boolean {
   return /user canceled|cancelled|canceled/i.test(message);
+}
+
+function isLinuxDialogCancel(command: string, e: unknown): boolean {
+  return (
+    e instanceof CommandError &&
+    e.command === command &&
+    e.code === 1 &&
+    e.stderr.trim() === "" &&
+    e.stdout.trim() === ""
+  );
 }
 
 async function pickDarwin(): Promise<string | null> {
@@ -64,7 +94,7 @@ async function pickLinux(): Promise<string | null> {
       return result.stdout.trim() || null;
     } catch (e) {
       const message = (e as Error).message;
-      if (isCancelMessage(message)) return null;
+      if (isCancelMessage(message) || isLinuxDialogCancel(command, e)) return null;
       errors.push(`${command}: ${message}`);
     }
   }
