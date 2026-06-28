@@ -60,18 +60,15 @@ export function Home() {
     setShowAddRepo(false);
   }
 
+  function toggleRepo(repoId: number) {
+    setCollapsedRepos((c) => ({ ...c, [repoId]: !(c[repoId] ?? false) }));
+  }
+
   return (
     <div className="home">
       <header className="home-header">
         <h1>Pull requests</h1>
         <div className="spacer" />
-        <button
-          className="btn primary"
-          onClick={() => setShowAddRepo((v) => !v)}
-          aria-expanded={showAddRepo}
-        >
-          Add repo
-        </button>
         {status && (
           <div className="status-strip">
             <span className={`pill ${status.gh.ok ? "ok" : "warn"}`}>
@@ -88,6 +85,13 @@ export function Home() {
             ))}
           </div>
         )}
+        <button
+          className="btn primary"
+          onClick={() => setShowAddRepo((v) => !v)}
+          aria-expanded={showAddRepo}
+        >
+          Add repo
+        </button>
       </header>
 
       {showAddRepo && <AddRepoPanel onAdded={handleRepoAdded} />}
@@ -105,19 +109,29 @@ export function Home() {
           <section key={repo.id} className={`repo-section ${isCollapsed ? "collapsed" : ""}`}>
             <div className="repo-header">
               <button
-                className="btn small icon-btn collapse-toggle"
-                onClick={() => setCollapsedRepos((c) => ({ ...c, [repo.id]: !isCollapsed }))}
+                type="button"
+                className="file-fold repo-fold"
+                onClick={() => toggleRepo(repo.id)}
                 aria-expanded={!isCollapsed}
                 aria-label={`${isCollapsed ? "Expand" : "Collapse"} ${repo.owner}/${repo.name}`}
                 title={isCollapsed ? "Expand repo" : "Collapse repo"}
               >
-                {isCollapsed ? "▸" : "▾"}
+                <span className={`chevron ${isCollapsed ? "right" : "down"}`} aria-hidden>
+                  ▾
+                </span>
               </button>
-              <h2>
-                {repo.owner}/{repo.name}
-              </h2>
+              <button
+                type="button"
+                className="repo-title-toggle"
+                onClick={() => toggleRepo(repo.id)}
+                aria-expanded={!isCollapsed}
+              >
+                <span className="repo-title">
+                  {repo.owner}/{repo.name}
+                </span>
+                <span className="muted small">{repo.localPath}</span>
+              </button>
               <span className="pill">{repoPrs.length} PRs</span>
-              <span className="muted small">{repo.localPath}</span>
               <div className="spacer" />
               <Link to={`/repos/${repo.id}/skills`} className="btn">
                 Skills

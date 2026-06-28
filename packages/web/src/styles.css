@@ -497,24 +497,47 @@ pre {
   border-bottom: 1px solid var(--border);
   background: linear-gradient(180deg, var(--bg-elev2), var(--bg-elev));
 }
-.repo-header h2 {
+.repo-title-toggle {
+  appearance: none;
+  flex: 0 1 auto;
+  min-width: 0;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.repo-title-toggle:hover .repo-title {
+  color: var(--accent);
+}
+.repo-title {
+  flex: 0 0 auto;
   margin: 0;
   font-size: 15px;
   font-weight: 600;
   letter-spacing: -0.02em;
 }
-.repo-header h2::before {
+.repo-title::before {
   content: "◆";
   margin-right: 8px;
   color: var(--text-faint);
   font-size: 10px;
   vertical-align: middle;
 }
-.repo-header .muted.small {
+.repo-title-toggle .muted.small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-family: "Geist Mono", monospace;
   font-size: 11.5px;
 }
-.collapse-toggle {
+.repo-fold {
   flex: 0 0 auto;
 }
 .pr-list {
