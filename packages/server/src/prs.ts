@@ -18,6 +18,7 @@ export interface PrListItem {
 
 export async function refreshOpenPRs(repo: RepoRow): Promise<PrListItem[]> {
   const open = await gh.listOpenPRs(repo.owner, repo.name);
+  const openNumbers = new Set(open.map((p) => p.number));
   const db = getDb();
   const upsert = db.prepare(`
     INSERT INTO prs (repo_id, number, title, body, head_sha, base_sha, head_ref, base_ref, state, url, author, updated_at)
@@ -47,6 +48,13 @@ export async function refreshOpenPRs(repo: RepoRow): Promise<PrListItem[]> {
     }
   });
   tx();
+
+  const staleNumbers = (
+    db.prepare("SELECT number FROM prs WHERE repo_id = ?").all(repo.id) as { number: number }[]
+  )
+    .map((p) => p.number)
+    .filter((number) => !openNumbers.has(number));
+  await cleanupClosedPRs(repo, staleNumbers);
 
   return listPRsForRepo(repo.id);
 }
