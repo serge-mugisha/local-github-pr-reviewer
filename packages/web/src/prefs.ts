@@ -11,11 +11,13 @@ export type ViewMode = "unified" | "split";
 export interface Prefs {
   viewMode: ViewMode;
   sidenavCollapsed: boolean;
+  collapsedRepoIds: number[];
 }
 
 const DEFAULTS: Prefs = {
   viewMode: "unified",
   sidenavCollapsed: false,
+  collapsedRepoIds: [],
 };
 
 const STORAGE_KEY = "reviewer.prefs";

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, type AppStatus, type PRListItem, type Repo } from "../api.js";
 import { AddRepoPanel } from "../components/AddRepoPanel.js";
+import { getPrefs, setPref } from "../prefs.js";
 
 export function Home() {
   const [status, setStatus] = useState<AppStatus | null>(null);
@@ -9,14 +10,19 @@ export function Home() {
   const [prs, setPrs] = useState<Record<number, PRListItem[]>>({});
   const [loading, setLoading] = useState<Record<number, boolean>>({});
   const [showAddRepo, setShowAddRepo] = useState(false);
-  const [collapsedRepos, setCollapsedRepos] = useState<Record<number, boolean>>({});
+  const [collapsedRepos, setCollapsedRepos] = useState<Set<number>>(
+    () => new Set(getPrefs().collapsedRepoIds),
+  );
 
   async function loadRepos() {
     const r = await api.repos();
     setRepos(r);
-    setCollapsedRepos((current) =>
-      Object.fromEntries(r.map((repo) => [repo.id, current[repo.id] ?? false])),
-    );
+    setCollapsedRepos((current) => {
+      const validRepoIds = new Set(r.map((repo) => repo.id));
+      const next = new Set([...current].filter((repoId) => validRepoIds.has(repoId)));
+      if (next.size !== current.size) setPref("collapsedRepoIds", [...next]);
+      return next;
+    });
     // For each repo: show cached PRs immediately, then trigger a refresh
     // in the background so the list converges to whatever's actually open
     // on GitHub. Refresh empty repos eagerly (no cache to show first).
@@ -61,7 +67,16 @@ export function Home() {
   }
 
   function toggleRepo(repoId: number) {
-    setCollapsedRepos((c) => ({ ...c, [repoId]: !(c[repoId] ?? false) }));
+    setCollapsedRepos((current) => {
+      const next = new Set(current);
+      if (next.has(repoId)) {
+        next.delete(repoId);
+      } else {
+        next.add(repoId);
+      }
+      setPref("collapsedRepoIds", [...next]);
+      return next;
+    });
   }
 
   return (
@@ -103,7 +118,7 @@ export function Home() {
       )}
 
       {repos.map((repo) => {
-        const isCollapsed = collapsedRepos[repo.id] ?? false;
+        const isCollapsed = collapsedRepos.has(repo.id);
         const repoPrs = prs[repo.id] ?? [];
         return (
           <section key={repo.id} className={`repo-section ${isCollapsed ? "collapsed" : ""}`}>
