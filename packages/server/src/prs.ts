@@ -135,7 +135,7 @@ export async function cleanupClosedPRs(repo: RepoRow, closedNumbers: number[]): 
   const placeholders = closedNumbers.map(() => "?").join(",");
   // Delete the AI chat sessions tied to these PRs before the rows (and their
   // cascading ai_sessions rows) are gone, so review sessions don't linger in
-  // the user's Claude/Gemini history.
+  // the user's provider CLI history.
   const prIds = (
     db
       .prepare(`SELECT id FROM prs WHERE repo_id = ? AND number IN (${placeholders})`)

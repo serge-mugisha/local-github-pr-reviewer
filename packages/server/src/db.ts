@@ -126,7 +126,7 @@ function migrate(db: Database.Database): void {
     );
 
     -- AI CLI chat sessions spawned while reviewing/replying on a PR. The
-    -- provider CLIs (Claude, Gemini) persist a conversation per invocation in
+    -- provider CLIs (Claude, Antigravity, Codex) may persist a conversation per invocation in
     -- the user's home dir; we track them here so they can be deleted when the
     -- PR is purged, keeping the user's real coding sessions uncluttered.
     CREATE TABLE IF NOT EXISTS ai_sessions (

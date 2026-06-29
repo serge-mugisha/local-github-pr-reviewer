@@ -91,7 +91,7 @@ changes. Example:
 add provider: ollama
 
 Adds an Ollama-backed local provider. Uses the same prompt builders and JSON
-parser as claude/gemini; the only delta is the CLI invocation.
+parser as claude/antigravity; the only delta is the CLI invocation.
 ```
 
 ## Reporting bugs / requesting features

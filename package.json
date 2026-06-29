@@ -1,7 +1,7 @@
 {
   "name": "local-github-pr-reviewer",
   "version": "0.1.0",
-  "description": "A local, read-only GitHub PR reviewer that uses your AI CLI of choice (Claude, Gemini) to comment on diffs and chat about them — without ever writing back to GitHub.",
+  "description": "A local, read-only GitHub PR reviewer that uses your AI CLI of choice (Claude, Antigravity, Codex) to comment on diffs and chat about them — without ever writing back to GitHub.",
   "license": "MIT",
   "author": "Serge Mugisha",
   "homepage": "https://github.com/serge-mugisha/local-github-pr-reviewer",
@@ -18,7 +18,8 @@
     "github",
     "ai",
     "claude",
-    "gemini",
+    "antigravity",
+    "agy",
     "developer-tools",
     "local-first"
   ],

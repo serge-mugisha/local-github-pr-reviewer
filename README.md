@@ -20,7 +20,7 @@ Most PR-review bots post directly to GitHub — noisy for teammates, awkward
 during iteration, and they can't see beyond the diff. This tool:
 
 - Runs entirely on your machine. Your code stays local.
-- Uses **your local AI CLI** (Claude Code or Gemini CLI today) with full
+- Uses **your local AI CLI** (Claude Code, Antigravity, or Codex today) with full
   read access to the working copy, so the reviewer can grep, read whole
   files, and look at tests before commenting.
 - Is **strictly read-only** against GitHub. Nothing you do here ever
@@ -37,7 +37,7 @@ during iteration, and they can't see beyond the diff. This tool:
 - **`gh`** (the GitHub CLI), authenticated (`gh auth login`)
 - At least one supported AI CLI on your `PATH`:
   - [Claude Code](https://docs.claude.com/en/docs/claude-code)
-  - [Gemini CLI](https://github.com/google-gemini/gemini-cli)
+  - Antigravity CLI (`agy`)
   - [Codex CLI](https://github.com/openai/codex) — authenticate with `codex login`
 - Local clones of the repositories you want to review
 
@@ -71,21 +71,20 @@ You can also add and remove repos at runtime from the **Settings** page —
 paste a local path, the server runs `gh repo view` inside it, and the
 GitHub owner/name is auto-detected.
 
-### Gemini authentication
+### Antigravity
 
-Google is retiring personal-account login for the Gemini CLI (`Code Assist
-for individuals`), so reviews fail with `IneligibleTierError`. Authenticate
-with an API key instead — either set `GEMINI_API_KEY` in the environment, or
-add a `gemini` block to `config.json`:
+Antigravity authenticates on its own through the local app/CLI state. Install
+and authenticate `agy`, then choose the provider in `config.json`:
 
 ```json
 {
-  "provider": "gemini",
-  "gemini": { "apiKey": "YOUR_KEY", "model": "gemini-2.5-pro" }
+  "provider": "antigravity",
+  "antigravity": { "model": "Gemini 3.5 Flash (Medium)", "printTimeout": "15m" }
 }
 ```
 
-Get a key at <https://aistudio.google.com/apikey>. `model` is optional.
+`model` and `printTimeout` are optional. Existing configs that still say
+`"provider": "gemini"` or `"provider": "agy"` are treated as Antigravity.
 
 ### Codex
 
@@ -156,7 +155,7 @@ via `spawn`/`exec`. See [SECURITY.md](SECURITY.md) for details.
    ▼               ▼                  ▼
  gh CLI         SQLite          Provider registry
  (read-only)    (better-sqlite3) ┌─────────┬─────────┐
-                                 │ claude  │ gemini  │  … extend here
+                                 │ claude  │ antigravity │  … extend here
                                  └────┬────┴────┬────┘
                                       │ spawned with cwd = local checkout
                                       ▼
@@ -169,7 +168,7 @@ Implement the `Provider` interface and register it.
 
 1. Create `packages/server/src/providers/<name>.ts`.
 2. Implement `review`, `reply`, and `revalidate`. Most providers shell out
-   to a CLI via `spawnCli` (see [`claude.ts`](packages/server/src/providers/claude.ts) or [`gemini.ts`](packages/server/src/providers/gemini.ts) — each is ~70 lines).
+   to a CLI via `spawnCli` (see [`claude.ts`](packages/server/src/providers/claude.ts) or [`antigravity.ts`](packages/server/src/providers/antigravity.ts)).
 3. Add to the registry in [`providers/index.ts`](packages/server/src/providers/index.ts).
 4. Add the id to the `provider` enum in [`config.ts`](packages/server/src/config.ts) if you want it
    selectable from the UI.

@@ -81,7 +81,7 @@ export interface ProviderProgress {
 }
 
 export interface Provider {
-  id: "claude" | "gemini" | "codex" | string;
+  id: "claude" | "antigravity" | "codex" | string;
   displayName: string;
   isAvailable(): Promise<boolean>;
   review(ctx: ReviewContext, onProgress?: ProviderProgress): Promise<ReviewResult>;

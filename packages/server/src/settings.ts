@@ -12,7 +12,7 @@ export function getSettings(): { provider: string; port: number; host: string } 
   return { provider: c.provider, port: c.port, host: c.host };
 }
 
-export function setProvider(provider: "claude" | "gemini" | string): void {
+export function setProvider(provider: "claude" | "antigravity" | string): void {
   const c = get();
   (c as AppConfig).provider = provider as AppConfig["provider"];
 }
