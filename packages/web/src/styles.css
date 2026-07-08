@@ -1750,6 +1750,7 @@ a:focus-visible {
 }
 
 .added-banner,
+.review-summary-banner,
 .review-error {
   display: flex;
   align-items: center;
@@ -1764,6 +1765,13 @@ a:focus-visible {
   gap: 10px;
   border: 1px solid color-mix(in srgb, var(--accent) 50%, var(--border));
   background: color-mix(in srgb, var(--accent) 8%, var(--bg-elev));
+}
+.review-summary-banner {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-elev);
 }
 /* Header line inside the review-complete banners (glyph + status + dismiss). */
 .banner-row {
@@ -1797,6 +1805,18 @@ a:focus-visible {
   border-radius: 50%;
   background: var(--accent);
   color: var(--on-solid);
+  font-weight: 700;
+}
+.review-summary-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--bg-inset);
+  color: var(--text-dim);
+  border: 1px solid var(--border);
   font-weight: 700;
 }
 .review-error {

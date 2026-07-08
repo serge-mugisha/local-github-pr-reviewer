@@ -400,11 +400,22 @@ export function PRView() {
             <AddedBanner
               addedThreads={stream.result!.addedThreads}
               staleMarked={stream.result!.staleMarked}
-              summary={detail.lastReview?.summary ?? null}
+              summary={detail.summaryReview?.summary ?? null}
               onDismiss={() => setStream((s) => ({ ...s, result: null }))}
             />
           )}
-          {showEmptyBanner && <NoIssuesBanner lastReview={detail.lastReview} />}
+          {showEmptyBanner && (
+            <NoIssuesBanner
+              lastReview={detail.lastReview}
+              summary={detail.summaryReview?.summary ?? null}
+            />
+          )}
+          {!stream.active &&
+            !showAddedBanner &&
+            !showEmptyBanner &&
+            detail.summaryReview?.summary.trim() && (
+              <ReviewSummaryBanner review={detail.summaryReview} />
+            )}
 
           {detail.pr.body && <CollapsiblePrBody body={detail.pr.body} />}
 
@@ -634,6 +645,26 @@ function ReviewSummary({ summary }: { summary: string | null | undefined }) {
   );
 }
 
+function ReviewSummaryBanner({ review }: { review: NonNullable<PRDetail["summaryReview"]> }) {
+  const when = review.finishedAt ? new Date(review.finishedAt).toLocaleString() : "earlier";
+  return (
+    <section className="review-summary-banner" aria-label="Review summary">
+      <div className="banner-row">
+        <span className="review-summary-glyph" aria-hidden>
+          i
+        </span>
+        <div>
+          <strong>Review summary</strong>
+          <div className="muted small">
+            Ran {when} on {review.headSha.slice(0, 7)} via {review.provider}.
+          </div>
+        </div>
+      </div>
+      <ReviewSummary summary={review.summary} />
+    </section>
+  );
+}
+
 function AddedBanner({
   addedThreads,
   staleMarked,
@@ -670,7 +701,13 @@ function AddedBanner({
   );
 }
 
-function NoIssuesBanner({ lastReview }: { lastReview: PRDetail["lastReview"] }) {
+function NoIssuesBanner({
+  lastReview,
+  summary,
+}: {
+  lastReview: PRDetail["lastReview"];
+  summary: string | null;
+}) {
   const when = lastReview?.finishedAt
     ? new Date(lastReview.finishedAt).toLocaleString()
     : "earlier";
@@ -689,7 +726,7 @@ function NoIssuesBanner({ lastReview }: { lastReview: PRDetail["lastReview"] }) 
           </div>
         </div>
       </div>
-      <ReviewSummary summary={lastReview?.summary} />
+      <ReviewSummary summary={summary} />
     </div>
   );
 }

@@ -280,6 +280,26 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
           error: string | null;
         }
       | undefined;
+    const summaryReviewRow = getDb()
+      .prepare(
+        `
+        SELECT * FROM reviews
+        WHERE pr_id = ?
+          AND status = 'done'
+          AND TRIM(COALESCE(summary, '')) != ''
+        ORDER BY id DESC
+        LIMIT 1
+      `,
+      )
+      .get(refreshed.id) as
+      | {
+          id: number;
+          head_sha: string;
+          provider: string;
+          summary: string;
+          finished_at: string | null;
+        }
+      | undefined;
     return {
       pr: {
         id: refreshed.id,
@@ -326,6 +346,15 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
             startedAt: lastReviewRow.started_at,
             finishedAt: lastReviewRow.finished_at,
             error: lastReviewRow.error,
+          }
+        : null,
+      summaryReview: summaryReviewRow
+        ? {
+            id: summaryReviewRow.id,
+            headSha: summaryReviewRow.head_sha,
+            provider: summaryReviewRow.provider,
+            summary: summaryReviewRow.summary,
+            finishedAt: summaryReviewRow.finished_at,
           }
         : null,
     };

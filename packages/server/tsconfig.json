@@ -6,7 +6,8 @@
     "moduleResolution": "Node",
     "module": "ESNext",
     "lib": ["ES2022"],
-    "types": ["node"]
+    "types": ["node"],
+    "declaration": true
   },
   "include": ["src/**/*"]
 }

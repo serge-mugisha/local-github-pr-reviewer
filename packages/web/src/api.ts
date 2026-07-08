@@ -67,12 +67,21 @@ export interface LastReview {
   error: string | null;
 }
 
+export interface SummaryReview {
+  id: number;
+  headSha: string;
+  provider: string;
+  summary: string;
+  finishedAt: string | null;
+}
+
 export interface PRDetail {
   pr: PR;
   repo: { id: number; owner: string; name: string };
   threads: Thread[];
   viewedFiles: string[];
   lastReview: LastReview | null;
+  summaryReview: SummaryReview | null;
 }
 
 export interface CategoryDef {
