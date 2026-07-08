@@ -140,6 +140,40 @@ That module:
 A unit test enforces that **no other file in the codebase** invokes `gh`
 via `spawn`/`exec`. See [SECURITY.md](SECURITY.md) for details.
 
+## MCP Server for AI Agents
+
+The tool includes a Model Context Protocol (MCP) server that exposes all PR reviewing, configuration, and conversational features to external AI agents (like Claude Desktop or Antigravity). This allows an AI agent to read PR diffs, set review rules, trigger reviews, and reply to threads directly from its own environment without using the web UI.
+
+### Usage with MCP Clients
+
+Add the MCP server to your AI agent's configuration. Ensure that the project is built first (`npm run build`).
+
+**For Claude Desktop** (`claude_desktop_config.json`):
+```json
+{
+  "mcpServers": {
+    "local-github-pr-reviewer": {
+      "command": "node",
+      "args": ["/absolute/path/to/local-github-pr-reviewer/packages/mcp/dist/index.js"]
+    }
+  }
+}
+```
+
+**For Antigravity** (`.gemini/config/config.json`):
+```json
+{
+  "mcp": {
+    "servers": {
+      "local-github-pr-reviewer": {
+        "command": "node",
+        "args": ["/absolute/path/to/local-github-pr-reviewer/packages/mcp/dist/index.js"]
+      }
+    }
+  }
+}
+```
+
 ## Architecture
 
 ```
@@ -178,6 +212,7 @@ Implement the `Provider` interface and register it.
 ```
 local-github-pr-reviewer/
 ├── packages/
+│   ├── mcp/     Model Context Protocol server for AI agents
 │   ├── server/  Fastify + SQLite + provider adapters
 │   └── web/     Vite + React UI
 ├── scripts/     Operational helpers (stop, etc.)
