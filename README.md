@@ -149,6 +149,7 @@ The tool includes a Model Context Protocol (MCP) server that exposes all PR revi
 Add the MCP server to your AI agent's configuration. Ensure that the project is built first (`npm run build`).
 
 **For Claude Desktop** (`claude_desktop_config.json`):
+
 ```json
 {
   "mcpServers": {
@@ -161,6 +162,7 @@ Add the MCP server to your AI agent's configuration. Ensure that the project is 
 ```
 
 **For Antigravity** (`.gemini/config/config.json`):
+
 ```json
 {
   "mcp": {
