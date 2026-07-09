@@ -149,6 +149,18 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         },
       },
       {
+        name: "apply_preset",
+        description: "Applies a specific review preset to a PR by its ID.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            prId: { type: "number" },
+            presetId: { type: "number" },
+          },
+          required: ["prId", "presetId"],
+        },
+      },
+      {
         name: "trigger_review",
         description:
           "Runs the AI review on a PR using whatever PR-specific or global config is active.",
@@ -373,6 +385,28 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 ),
                 null,
                 2,
+              ),
+            },
+          ],
+        };
+      }
+      case "apply_preset": {
+        const { prId, presetId } = z.object({ prId: z.number(), presetId: z.number() }).parse(request.params.arguments);
+        requirePr(prId);
+        const preset = api.listPresets().find(p => p.id === presetId);
+        if (!preset) throw new McpError(ErrorCode.InvalidParams, `Preset ${presetId} not found`);
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(
+                api.setPrReviewConfig(prId, {
+                  categories: preset.categories,
+                  strictness: preset.strictness,
+                  customRules: preset.customRules,
+                }),
+                null,
+                2
               ),
             },
           ],
