@@ -18,6 +18,37 @@ interface Job {
   type: string;
 }
 const jobs = new Map<number, Job>();
+const MAX_JOBS = 100;
+
+function launchJob(type: string, promise: Promise<any>) {
+  const jobId = nextJobId++;
+  jobs.set(jobId, { id: jobId, status: "running", type });
+
+  if (jobs.size > MAX_JOBS) {
+    const oldestKeys = Array.from(jobs.keys()).slice(0, jobs.size - MAX_JOBS);
+    for (const key of oldestKeys) {
+      jobs.delete(key);
+    }
+  }
+
+  promise
+    .then((result) => {
+      const job = jobs.get(jobId);
+      if (job) {
+        job.status = "completed";
+        job.result = result;
+      }
+    })
+    .catch((error) => {
+      const job = jobs.get(jobId);
+      if (job) {
+        job.status = "error";
+        job.error = String(error);
+      }
+    });
+
+  return { content: [{ type: "text", text: JSON.stringify({ jobId, status: "running" }, null, 2) }] };
+}
 
 const server = new Server(
   {
@@ -445,14 +476,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const repo = requireRepo(pr.repo_id);
         const providerId = api.getSettings().provider;
 
-        const jobId = nextJobId++;
-        jobs.set(jobId, { id: jobId, status: "running", type: "review" });
-
-        api.runReview({ repo, pr, providerId })
-          .then(result => { jobs.set(jobId, { id: jobId, status: "completed", type: "review", result }); })
-          .catch(error => { jobs.set(jobId, { id: jobId, status: "error", type: "review", error: String(error) }); });
-
-        return { content: [{ type: "text", text: JSON.stringify({ jobId, status: "running" }, null, 2) }] };
+        return launchJob("review", api.runReview({ repo, pr, providerId }));
       }
       case "reply_to_thread": {
         const { threadId, message } = z
@@ -466,14 +490,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const repo = requireRepo(pr.repo_id);
         const providerId = api.getSettings().provider;
 
-        const jobId = nextJobId++;
-        jobs.set(jobId, { id: jobId, status: "running", type: "reply" });
-
-        api.runReply({ repo, pr, threadId, userMessage: message, providerId })
-          .then(result => { jobs.set(jobId, { id: jobId, status: "completed", type: "reply", result }); })
-          .catch(error => { jobs.set(jobId, { id: jobId, status: "error", type: "reply", error: String(error) }); });
-
-        return { content: [{ type: "text", text: JSON.stringify({ jobId, status: "running" }, null, 2) }] };
+        return launchJob("reply", api.runReply({ repo, pr, threadId, userMessage: message, providerId }));
       }
       case "revalidate_thread": {
         const { threadId } = z.object({ threadId: z.number() }).parse(request.params.arguments);
@@ -485,14 +502,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const repo = requireRepo(pr.repo_id);
         const providerId = api.getSettings().provider;
 
-        const jobId = nextJobId++;
-        jobs.set(jobId, { id: jobId, status: "running", type: "revalidate" });
-
-        api.runRevalidate({ repo, pr, threadId, providerId })
-          .then(result => { jobs.set(jobId, { id: jobId, status: "completed", type: "revalidate", result }); })
-          .catch(error => { jobs.set(jobId, { id: jobId, status: "error", type: "revalidate", error: String(error) }); });
-
-        return { content: [{ type: "text", text: JSON.stringify({ jobId, status: "running" }, null, 2) }] };
+        return launchJob("revalidate", api.runRevalidate({ repo, pr, threadId, providerId }));
       }
       case "set_thread_status": {
         const { threadId, status } = z
