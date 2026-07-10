@@ -18,6 +18,7 @@ import { getPrReviewConfig, getGlobalReviewConfig } from "./reviewConfig.js";
 import * as gh from "./github.js";
 import { hydratePR } from "./prs.js";
 import { recordSessions } from "./sessions.js";
+import { withWorktree } from "./worktree.js";
 
 function now(): string {
   return new Date().toISOString();
@@ -84,33 +85,35 @@ export async function runReview(
   `);
 
   try {
-    const ctx: ReviewContext = {
-      cwd: repo.local_path,
-      prTitle: refreshed.title,
-      prBody: refreshed.body,
-      prNumber: refreshed.number,
-      repoSlug: `${repo.owner}/${repo.name}`,
-      headSha: refreshed.head_sha,
-      baseSha: refreshed.base_sha,
-      diff,
-      skills,
-      config: {
-        categories: prConfig.categories,
-        strictness: prConfig.strictness,
-        globalRules: globalConfig.customRules,
-        repoRules: skills,
-        perPrRules: prConfig.customRules,
-        pathInclude: prConfig.pathInclude,
-        pathExclude: prConfig.pathExclude,
-      },
-      existingOpenThreads: existingOpen.map((t) => ({
-        path: t.file_path,
-        line: t.line,
-        summary: (t.first_body ?? "").slice(0, 200),
-      })),
-    };
+    const result = await withWorktree(repo.local_path, refreshed.number, refreshed.head_sha, async (worktreePath) => {
+      const ctx: ReviewContext = {
+        cwd: worktreePath,
+        prTitle: refreshed.title,
+        prBody: refreshed.body,
+        prNumber: refreshed.number,
+        repoSlug: `${repo.owner}/${repo.name}`,
+        headSha: refreshed.head_sha,
+        baseSha: refreshed.base_sha,
+        diff,
+        skills,
+        config: {
+          categories: prConfig.categories,
+          strictness: prConfig.strictness,
+          globalRules: globalConfig.customRules,
+          repoRules: skills,
+          perPrRules: prConfig.customRules,
+          pathInclude: prConfig.pathInclude,
+          pathExclude: prConfig.pathExclude,
+        },
+        existingOpenThreads: existingOpen.map((t) => ({
+          path: t.file_path,
+          line: t.line,
+          summary: (t.first_body ?? "").slice(0, 200),
+        })),
+      };
 
-    const result = await provider.review(ctx, onProgress);
+      return await provider.review(ctx, onProgress);
+    });
     recordSessions(refreshed.id, providerId, result.sessionIds, repo.local_path);
 
     // Dedupe + insert
@@ -188,22 +191,24 @@ export async function runReply(args: ReplyArgs): Promise<{ aiCommentId: number }
   `,
   ).run(threadId, userMessage, pr.head_sha, now());
 
-  const ctx: ReplyContext = {
-    cwd: repo.local_path,
-    prTitle: pr.title,
-    prNumber: pr.number,
-    repoSlug: `${repo.owner}/${repo.name}`,
-    headSha: pr.head_sha,
-    threadAnchor: { path: thread.file_path, line: thread.line },
-    threadHistory: [
-      ...history.map((c) => ({ author: c.author as "ai" | "user", body: c.body })),
-      { author: "user" as const, body: userMessage },
-    ],
-    userMessage,
-    skills: getSkills(repo.id),
-  };
+  const result = await withWorktree(repo.local_path, pr.number, pr.head_sha, async (worktreePath) => {
+    const ctx: ReplyContext = {
+      cwd: worktreePath,
+      prTitle: pr.title,
+      prNumber: pr.number,
+      repoSlug: `${repo.owner}/${repo.name}`,
+      headSha: pr.head_sha,
+      threadAnchor: { path: thread.file_path, line: thread.line },
+      threadHistory: [
+        ...history.map((c) => ({ author: c.author as "ai" | "user", body: c.body })),
+        { author: "user" as const, body: userMessage },
+      ],
+      userMessage,
+      skills: getSkills(repo.id),
+    };
 
-  const result = await provider.reply(ctx, onProgress);
+    return await provider.reply(ctx, onProgress);
+  });
   recordSessions(pr.id, providerId, result.sessionIds, repo.local_path);
 
   const aiCommentId = Number(
@@ -246,19 +251,21 @@ export async function runRevalidate(
     .prepare("SELECT * FROM comments WHERE thread_id = ? ORDER BY id ASC")
     .all(threadId) as CommentRow[];
 
-  const ctx: RevalidateContext = {
-    cwd: repo.local_path,
-    prTitle: refreshed.title,
-    prNumber: refreshed.number,
-    repoSlug: `${repo.owner}/${repo.name}`,
-    headSha: refreshed.head_sha,
-    baseSha: refreshed.base_sha,
-    threadAnchor: { path: thread.file_path, line: thread.line },
-    threadHistory: history.map((c) => ({ author: c.author as "ai" | "user", body: c.body })),
-    skills: getSkills(repo.id),
-  };
+  const result = await withWorktree(repo.local_path, refreshed.number, refreshed.head_sha, async (worktreePath) => {
+    const ctx: RevalidateContext = {
+      cwd: worktreePath,
+      prTitle: refreshed.title,
+      prNumber: refreshed.number,
+      repoSlug: `${repo.owner}/${repo.name}`,
+      headSha: refreshed.head_sha,
+      baseSha: refreshed.base_sha,
+      threadAnchor: { path: thread.file_path, line: thread.line },
+      threadHistory: history.map((c) => ({ author: c.author as "ai" | "user", body: c.body })),
+      skills: getSkills(repo.id),
+    };
 
-  const result = await provider.revalidate(ctx, onProgress);
+    return await provider.revalidate(ctx, onProgress);
+  });
   recordSessions(refreshed.id, providerId, result.sessionIds, repo.local_path);
 
   // Mark thread fresh on this sha (no longer stale) regardless of result.
