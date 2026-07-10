@@ -47,7 +47,9 @@ function launchJob(type: string, promise: Promise<unknown>) {
       }
     });
 
-  return { content: [{ type: "text", text: JSON.stringify({ jobId, status: "running" }, null, 2) }] };
+  return {
+    content: [{ type: "text", text: JSON.stringify({ jobId, status: "running" }, null, 2) }],
+  };
 }
 
 const server = new Server(
@@ -203,7 +205,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "get_job_status",
-        description: "Checks the status of an asynchronous background job (like a review or revalidation).",
+        description:
+          "Checks the status of an asynchronous background job (like a review or revalidation).",
         inputSchema: {
           type: "object",
           properties: {
@@ -443,9 +446,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
       case "apply_preset": {
-        const { prId, presetId } = z.object({ prId: z.number(), presetId: z.number() }).parse(request.params.arguments);
+        const { prId, presetId } = z
+          .object({ prId: z.number(), presetId: z.number() })
+          .parse(request.params.arguments);
         requirePr(prId);
-        const preset = api.listPresets().find(p => p.id === presetId);
+        const preset = api.listPresets().find((p) => p.id === presetId);
         if (!preset) throw new McpError(ErrorCode.InvalidParams, `Preset ${presetId} not found`);
         return {
           content: [
@@ -458,7 +463,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                   customRules: preset.customRules,
                 }),
                 null,
-                2
+                2,
               ),
             },
           ],
@@ -490,7 +495,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const repo = requireRepo(pr.repo_id);
         const providerId = api.getSettings().provider;
 
-        return launchJob("reply", api.runReply({ repo, pr, threadId, userMessage: message, providerId }));
+        return launchJob(
+          "reply",
+          api.runReply({ repo, pr, threadId, userMessage: message, providerId }),
+        );
       }
       case "revalidate_thread": {
         const { threadId } = z.object({ threadId: z.number() }).parse(request.params.arguments);
