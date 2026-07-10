@@ -18,6 +18,7 @@ import { getPrReviewConfig, getGlobalReviewConfig } from "./reviewConfig.js";
 import * as gh from "./github.js";
 import { hydratePR } from "./prs.js";
 import { recordSessions } from "./sessions.js";
+import { preparePrHeadWorktree } from "./prWorktree.js";
 
 function now(): string {
   return new Date().toISOString();
@@ -84,10 +85,12 @@ export async function runReview(
   `);
 
   try {
-    const ctx: ReviewContext = {
-      cwd: repo.local_path,
-      prTitle: refreshed.title,
-      prBody: refreshed.body,
+    const wt = await preparePrHeadWorktree({ repo, pr: refreshed, onProgress });
+    try {
+      const ctx: ReviewContext = {
+        cwd: wt.cwd,
+        prTitle: refreshed.title,
+        prBody: refreshed.body,
       prNumber: refreshed.number,
       repoSlug: `${repo.owner}/${repo.name}`,
       headSha: refreshed.head_sha,
@@ -111,7 +114,7 @@ export async function runReview(
     };
 
     const result = await provider.review(ctx, onProgress);
-    recordSessions(refreshed.id, providerId, result.sessionIds, repo.local_path);
+    recordSessions(refreshed.id, providerId, result.sessionIds, wt.cwd);
 
     // Dedupe + insert
     const existingFps = new Set(
@@ -152,6 +155,9 @@ export async function runReview(
 
     reviewFinish.run("done", result.summary, now(), null, reviewId);
     return { reviewId, addedThreads: added, staleMarked };
+    } finally {
+      await wt.cleanup();
+    }
   } catch (e) {
     reviewFinish.run("error", null, now(), (e as Error).message, reviewId);
     throw e;
@@ -180,21 +186,25 @@ export async function runReply(args: ReplyArgs): Promise<{ aiCommentId: number }
     .prepare("SELECT * FROM comments WHERE thread_id = ? ORDER BY id ASC")
     .all(threadId) as CommentRow[];
 
+  const refreshed = await hydratePR(repo, pr.number);
+
   // Append the user's new message first.
   db.prepare(
     `
     INSERT INTO comments (thread_id, author, body, head_sha, kind, created_at)
     VALUES (?, 'user', ?, ?, 'normal', ?)
   `,
-  ).run(threadId, userMessage, pr.head_sha, now());
+  ).run(threadId, userMessage, refreshed.head_sha, now());
 
-  const ctx: ReplyContext = {
-    cwd: repo.local_path,
-    prTitle: pr.title,
-    prNumber: pr.number,
-    repoSlug: `${repo.owner}/${repo.name}`,
-    headSha: pr.head_sha,
-    threadAnchor: { path: thread.file_path, line: thread.line },
+  const wt = await preparePrHeadWorktree({ repo, pr: refreshed, onProgress });
+  try {
+    const ctx: ReplyContext = {
+      cwd: wt.cwd,
+      prTitle: refreshed.title,
+      prNumber: refreshed.number,
+      repoSlug: `${repo.owner}/${repo.name}`,
+      headSha: refreshed.head_sha,
+      threadAnchor: { path: thread.file_path, line: thread.line },
     threadHistory: [
       ...history.map((c) => ({ author: c.author as "ai" | "user", body: c.body })),
       { author: "user" as const, body: userMessage },
@@ -204,7 +214,7 @@ export async function runReply(args: ReplyArgs): Promise<{ aiCommentId: number }
   };
 
   const result = await provider.reply(ctx, onProgress);
-  recordSessions(pr.id, providerId, result.sessionIds, repo.local_path);
+  recordSessions(refreshed.id, providerId, result.sessionIds, wt.cwd);
 
   const aiCommentId = Number(
     db
@@ -213,11 +223,14 @@ export async function runReply(args: ReplyArgs): Promise<{ aiCommentId: number }
     INSERT INTO comments (thread_id, author, body, head_sha, kind, created_at)
     VALUES (?, 'ai', ?, ?, 'normal', ?)
   `,
-      )
-      .run(threadId, result.body, pr.head_sha, now()).lastInsertRowid,
+    )
+    .run(threadId, result.body, refreshed.head_sha, now()).lastInsertRowid,
   );
 
   return { aiCommentId };
+  } finally {
+    await wt.cleanup();
+  }
 }
 
 export interface RevalidateArgs {
@@ -246,11 +259,13 @@ export async function runRevalidate(
     .prepare("SELECT * FROM comments WHERE thread_id = ? ORDER BY id ASC")
     .all(threadId) as CommentRow[];
 
-  const ctx: RevalidateContext = {
-    cwd: repo.local_path,
-    prTitle: refreshed.title,
-    prNumber: refreshed.number,
-    repoSlug: `${repo.owner}/${repo.name}`,
+  const wt = await preparePrHeadWorktree({ repo, pr: refreshed, onProgress });
+  try {
+    const ctx: RevalidateContext = {
+      cwd: wt.cwd,
+      prTitle: refreshed.title,
+      prNumber: refreshed.number,
+      repoSlug: `${repo.owner}/${repo.name}`,
     headSha: refreshed.head_sha,
     baseSha: refreshed.base_sha,
     threadAnchor: { path: thread.file_path, line: thread.line },
@@ -259,7 +274,7 @@ export async function runRevalidate(
   };
 
   const result = await provider.revalidate(ctx, onProgress);
-  recordSessions(refreshed.id, providerId, result.sessionIds, repo.local_path);
+  recordSessions(refreshed.id, providerId, result.sessionIds, wt.cwd);
 
   // Mark thread fresh on this sha (no longer stale) regardless of result.
   db.prepare("UPDATE threads SET stale = 0, last_seen_sha = ? WHERE id = ?").run(
@@ -289,6 +304,9 @@ export async function runRevalidate(
   }
 
   return { resolved: result.resolved, commentId };
+  } finally {
+    await wt.cleanup();
+  }
 }
 
 export function setThreadStatus(threadId: number, status: "open" | "resolved"): void {

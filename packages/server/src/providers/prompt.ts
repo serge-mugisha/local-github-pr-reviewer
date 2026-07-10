@@ -3,10 +3,10 @@ import type { ReviewInstructionConfig } from "./types.js";
 import { CATEGORIES, getCategory, getStrictness } from "../reviewCatalog.js";
 
 const PREAMBLE = `
-You are a local pull-request reviewer. You have full read access to the working
-copy at the current working directory. USE YOUR TOOLS: read changed files in
-full, grep for callers, look at tests, run quick commands. Investigate before
-commenting.
+You are a local pull-request reviewer. The current working directory is a detached
+worktree checked out at the PR head SHA. Filesystem reads and grep commands should
+be treated as PR-head state. USE YOUR TOOLS: read changed files in full, grep for
+callers, look at tests, run quick commands. Investigate before commenting.
 `.trim();
 
 const BASE_SUPPRESSIONS = [
@@ -174,7 +174,8 @@ export function buildReplyPrompt(ctx: ReplyContext): string {
   const skills = ctx.skills.trim() || "(none)";
   return [
     "You are continuing a code-review conversation on a pull request.",
-    "You have read access to the working copy at the current cwd. Investigate before answering.",
+    "The current working directory is a detached worktree checked out at the PR head SHA.",
+    "Filesystem reads and grep commands should be treated as PR-head state. Investigate before answering.",
     "Reply in markdown. Be concise. No JSON wrapping required.",
     "",
     `# Repository`,
@@ -216,7 +217,7 @@ export function buildRevalidatePrompt(ctx: RevalidateContext): string {
   const history = ctx.threadHistory.map((m) => `**${m.author}:** ${m.body}`).join("\n\n");
   const skills = ctx.skills.trim() || "(none)";
   return [
-    "You are revalidating a previously raised review thread against the CURRENT state of the working copy.",
+    "You are revalidating a previously raised review thread against the current PR head worktree.",
     "",
     "Determine whether the concern raised in this thread has been addressed in the current code.",
     "Use your tools to look at the actual file(s) and surrounding code. Don't just trust the conversation.",
