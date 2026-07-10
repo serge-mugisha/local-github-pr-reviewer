@@ -13,14 +13,14 @@ let nextJobId = 1;
 interface Job {
   id: number;
   status: "running" | "completed" | "error";
-  result?: any;
+  result?: unknown;
   error?: string;
   type: string;
 }
 const jobs = new Map<number, Job>();
 const MAX_JOBS = 100;
 
-function launchJob(type: string, promise: Promise<any>) {
+function launchJob(type: string, promise: Promise<unknown>) {
   const jobId = nextJobId++;
   jobs.set(jobId, { id: jobId, status: "running", type });
 
