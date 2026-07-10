@@ -31,9 +31,9 @@ describe("preparePrHeadWorktree", () => {
       const ee: any = new EventEmitter();
       ee.stdout = new EventEmitter();
       ee.stderr = new EventEmitter();
-      
+
       let out = "";
-      
+
       if (args[0] === "fetch") out = "";
       else if (args[0] === "rev-parse" && args[1] !== "HEAD") {
         out = responses["rev-parse ref"] || "correct_sha";
@@ -68,7 +68,7 @@ describe("preparePrHeadWorktree", () => {
       ["fetch", "--no-tags", "origin", "+refs/pull/42/head:refs/reviewer/pr/1/42"],
       expect.any(Object),
     );
-    
+
     expect(mockSpawn).toHaveBeenCalledWith(
       "git",
       ["worktree", "add", "--detach", wt.cwd, "test_sha"],
@@ -96,10 +96,21 @@ describe("preparePrHeadWorktree", () => {
 
   it("prunes worktrees", async () => {
     setupGitMock({});
-    const repos = [{ id: 1, local_path: "/local1" }, { id: 2, local_path: "/local2" }] as any;
+    const repos = [
+      { id: 1, local_path: "/local1" },
+      { id: 2, local_path: "/local2" },
+    ] as any;
     await pruneWorktrees(repos);
-    expect(mockSpawn).toHaveBeenCalledWith("git", ["worktree", "prune"], expect.objectContaining({ cwd: "/local1" }));
-    expect(mockSpawn).toHaveBeenCalledWith("git", ["worktree", "prune"], expect.objectContaining({ cwd: "/local2" }));
+    expect(mockSpawn).toHaveBeenCalledWith(
+      "git",
+      ["worktree", "prune"],
+      expect.objectContaining({ cwd: "/local1" }),
+    );
+    expect(mockSpawn).toHaveBeenCalledWith(
+      "git",
+      ["worktree", "prune"],
+      expect.objectContaining({ cwd: "/local2" }),
+    );
     expect(rm).toHaveBeenCalledWith("/data/worktrees", expect.any(Object));
   });
 });

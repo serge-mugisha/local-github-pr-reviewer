@@ -11,11 +11,7 @@ export interface PrWorktree {
   cleanup(): Promise<void>;
 }
 
-function runGit(
-  args: string[],
-  cwd: string,
-  onProgress?: ProviderProgress,
-): Promise<string> {
+function runGit(args: string[], cwd: string, onProgress?: ProviderProgress): Promise<string> {
   return new Promise((resolveP, rejectP) => {
     const child = spawn("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
@@ -50,7 +46,7 @@ export async function pruneWorktrees(repos: RepoRow[]): Promise<void> {
       } catch {
         // ignore
       }
-    })
+    }),
   );
 
   // Sweep the worktrees directory
@@ -67,11 +63,17 @@ export async function preparePrHeadWorktree(args: {
   onProgress?: ProviderProgress;
 }): Promise<PrWorktree> {
   const { repo, pr, onProgress } = args;
-  
-  onProgress?.({ type: "log", data: `Preparing worktree for PR #${pr.number} at ${pr.head_sha}...` });
+
+  onProgress?.({
+    type: "log",
+    data: `Preparing worktree for PR #${pr.number} at ${pr.head_sha}...`,
+  });
 
   const token = randomBytes(4).toString("hex");
-  const worktreePath = resolve(dataDir(), `worktrees/repo-${repo.id}/pr-${pr.number}-${pr.head_sha}-${token}`);
+  const worktreePath = resolve(
+    dataDir(),
+    `worktrees/repo-${repo.id}/pr-${pr.number}-${pr.head_sha}-${token}`,
+  );
 
   // Fetch the PR head to a reviewer-owned ref
   const ref = `refs/reviewer/pr/${repo.id}/${pr.number}`;
@@ -88,7 +90,11 @@ export async function preparePrHeadWorktree(args: {
   }
 
   // Create the detached worktree
-  await runGit(["worktree", "add", "--detach", worktreePath, pr.head_sha], repo.local_path, onProgress);
+  await runGit(
+    ["worktree", "add", "--detach", worktreePath, pr.head_sha],
+    repo.local_path,
+    onProgress,
+  );
 
   return {
     cwd: worktreePath,
