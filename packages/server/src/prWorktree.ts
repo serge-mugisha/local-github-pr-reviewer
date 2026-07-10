@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { resolve } from "node:path";
-import { stat, rm } from "node:fs/promises";
+import { rm } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { dataDir } from "./config.js";
 import type { RepoRow, PrRow } from "./db.js";
@@ -39,15 +39,6 @@ function runGit(
     });
     child.on("error", rejectP);
   });
-}
-
-async function pathExists(path: string): Promise<boolean> {
-  try {
-    await stat(path);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 export async function pruneWorktrees(repos: RepoRow[]): Promise<void> {

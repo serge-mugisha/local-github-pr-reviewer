@@ -32,7 +32,6 @@ describe("preparePrHeadWorktree", () => {
       ee.stdout = new EventEmitter();
       ee.stderr = new EventEmitter();
       
-      const fullArgs = args.join(" ");
       let out = "";
       
       if (args[0] === "fetch") out = "";
