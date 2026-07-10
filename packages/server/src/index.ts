@@ -7,6 +7,7 @@ import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync } from "
 import { loadConfig } from "./config.js";
 import { syncReposFromConfig, listRepos } from "./db.js";
 import { purgeClosedForRepo } from "./prs.js";
+import { pruneWorktrees } from "./prWorktree.js";
 import { registerRoutes } from "./routes.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -146,6 +147,10 @@ async function main(): Promise<void> {
       }
     }),
   );
+
+  void pruneWorktrees(repos).catch((e) => {
+    app.log.warn(`pruneWorktrees failed: ${(e as Error).message}`);
+  });
 
   installSignalHandlers(app);
 

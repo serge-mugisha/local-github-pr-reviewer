@@ -91,70 +91,70 @@ export async function runReview(
         cwd: wt.cwd,
         prTitle: refreshed.title,
         prBody: refreshed.body,
-      prNumber: refreshed.number,
-      repoSlug: `${repo.owner}/${repo.name}`,
-      headSha: refreshed.head_sha,
-      baseSha: refreshed.base_sha,
-      diff,
-      skills,
-      config: {
-        categories: prConfig.categories,
-        strictness: prConfig.strictness,
-        globalRules: globalConfig.customRules,
-        repoRules: skills,
-        perPrRules: prConfig.customRules,
-        pathInclude: prConfig.pathInclude,
-        pathExclude: prConfig.pathExclude,
-      },
-      existingOpenThreads: existingOpen.map((t) => ({
-        path: t.file_path,
-        line: t.line,
-        summary: (t.first_body ?? "").slice(0, 200),
-      })),
-    };
+        prNumber: refreshed.number,
+        repoSlug: `${repo.owner}/${repo.name}`,
+        headSha: refreshed.head_sha,
+        baseSha: refreshed.base_sha,
+        diff,
+        skills,
+        config: {
+          categories: prConfig.categories,
+          strictness: prConfig.strictness,
+          globalRules: globalConfig.customRules,
+          repoRules: skills,
+          perPrRules: prConfig.customRules,
+          pathInclude: prConfig.pathInclude,
+          pathExclude: prConfig.pathExclude,
+        },
+        existingOpenThreads: existingOpen.map((t) => ({
+          path: t.file_path,
+          line: t.line,
+          summary: (t.first_body ?? "").slice(0, 200),
+        })),
+      };
 
-    const result = await provider.review(ctx, onProgress);
-    recordSessions(refreshed.id, providerId, result.sessionIds, wt.cwd);
+      const result = await provider.review(ctx, onProgress);
+      recordSessions(refreshed.id, providerId, result.sessionIds, wt.cwd);
 
-    // Dedupe + insert
-    const existingFps = new Set(
-      existingOpen.map((t) => fingerprint(t.file_path, t.line, t.first_body ?? "")),
-    );
-    let added = 0;
+      // Dedupe + insert
+      const existingFps = new Set(
+        existingOpen.map((t) => fingerprint(t.file_path, t.line, t.first_body ?? "")),
+      );
+      let added = 0;
 
-    const insertThread = db.prepare(`
+      const insertThread = db.prepare(`
       INSERT INTO threads (pr_id, file_path, line, side, severity, status, first_seen_sha, last_seen_sha, stale, created_at)
       VALUES (?, ?, ?, ?, ?, 'open', ?, ?, 0, ?)
     `);
-    const insertComment = db.prepare(`
+      const insertComment = db.prepare(`
       INSERT INTO comments (thread_id, author, body, head_sha, kind, created_at)
       VALUES (?, 'ai', ?, ?, 'normal', ?)
     `);
 
-    const tx = db.transaction(() => {
-      for (const c of result.comments) {
-        const fp = fingerprint(c.path, c.line, c.body);
-        if (existingFps.has(fp)) continue;
-        const tid = Number(
-          insertThread.run(
-            refreshed.id,
-            c.path,
-            c.line,
-            c.side,
-            c.severity,
-            refreshed.head_sha,
-            refreshed.head_sha,
-            now(),
-          ).lastInsertRowid,
-        );
-        insertComment.run(tid, c.body, refreshed.head_sha, now());
-        added++;
-      }
-    });
-    tx();
+      const tx = db.transaction(() => {
+        for (const c of result.comments) {
+          const fp = fingerprint(c.path, c.line, c.body);
+          if (existingFps.has(fp)) continue;
+          const tid = Number(
+            insertThread.run(
+              refreshed.id,
+              c.path,
+              c.line,
+              c.side,
+              c.severity,
+              refreshed.head_sha,
+              refreshed.head_sha,
+              now(),
+            ).lastInsertRowid,
+          );
+          insertComment.run(tid, c.body, refreshed.head_sha, now());
+          added++;
+        }
+      });
+      tx();
 
-    reviewFinish.run("done", result.summary, now(), null, reviewId);
-    return { reviewId, addedThreads: added, staleMarked };
+      reviewFinish.run("done", result.summary, now(), null, reviewId);
+      return { reviewId, addedThreads: added, staleMarked };
     } finally {
       await wt.cleanup();
     }
@@ -205,29 +205,29 @@ export async function runReply(args: ReplyArgs): Promise<{ aiCommentId: number }
       repoSlug: `${repo.owner}/${repo.name}`,
       headSha: refreshed.head_sha,
       threadAnchor: { path: thread.file_path, line: thread.line },
-    threadHistory: [
-      ...history.map((c) => ({ author: c.author as "ai" | "user", body: c.body })),
-      { author: "user" as const, body: userMessage },
-    ],
-    userMessage,
-    skills: getSkills(repo.id),
-  };
+      threadHistory: [
+        ...history.map((c) => ({ author: c.author as "ai" | "user", body: c.body })),
+        { author: "user" as const, body: userMessage },
+      ],
+      userMessage,
+      skills: getSkills(repo.id),
+    };
 
-  const result = await provider.reply(ctx, onProgress);
-  recordSessions(refreshed.id, providerId, result.sessionIds, wt.cwd);
+    const result = await provider.reply(ctx, onProgress);
+    recordSessions(refreshed.id, providerId, result.sessionIds, wt.cwd);
 
-  const aiCommentId = Number(
-    db
-      .prepare(
-        `
+    const aiCommentId = Number(
+      db
+        .prepare(
+          `
     INSERT INTO comments (thread_id, author, body, head_sha, kind, created_at)
     VALUES (?, 'ai', ?, ?, 'normal', ?)
   `,
-    )
-    .run(threadId, result.body, refreshed.head_sha, now()).lastInsertRowid,
-  );
+        )
+        .run(threadId, result.body, refreshed.head_sha, now()).lastInsertRowid,
+    );
 
-  return { aiCommentId };
+    return { aiCommentId };
   } finally {
     await wt.cleanup();
   }
@@ -266,44 +266,44 @@ export async function runRevalidate(
       prTitle: refreshed.title,
       prNumber: refreshed.number,
       repoSlug: `${repo.owner}/${repo.name}`,
-    headSha: refreshed.head_sha,
-    baseSha: refreshed.base_sha,
-    threadAnchor: { path: thread.file_path, line: thread.line },
-    threadHistory: history.map((c) => ({ author: c.author as "ai" | "user", body: c.body })),
-    skills: getSkills(repo.id),
-  };
+      headSha: refreshed.head_sha,
+      baseSha: refreshed.base_sha,
+      threadAnchor: { path: thread.file_path, line: thread.line },
+      threadHistory: history.map((c) => ({ author: c.author as "ai" | "user", body: c.body })),
+      skills: getSkills(repo.id),
+    };
 
-  const result = await provider.revalidate(ctx, onProgress);
-  recordSessions(refreshed.id, providerId, result.sessionIds, wt.cwd);
+    const result = await provider.revalidate(ctx, onProgress);
+    recordSessions(refreshed.id, providerId, result.sessionIds, wt.cwd);
 
-  // Mark thread fresh on this sha (no longer stale) regardless of result.
-  db.prepare("UPDATE threads SET stale = 0, last_seen_sha = ? WHERE id = ?").run(
-    refreshed.head_sha,
-    threadId,
-  );
+    // Mark thread fresh on this sha (no longer stale) regardless of result.
+    db.prepare("UPDATE threads SET stale = 0, last_seen_sha = ? WHERE id = ?").run(
+      refreshed.head_sha,
+      threadId,
+    );
 
-  const commentId = Number(
-    db
-      .prepare(
-        `
+    const commentId = Number(
+      db
+        .prepare(
+          `
     INSERT INTO comments (thread_id, author, body, head_sha, kind, created_at)
     VALUES (?, 'ai', ?, ?, ?, ?)
   `,
-      )
-      .run(
-        threadId,
-        result.body,
-        refreshed.head_sha,
-        result.resolved ? "revalidate-resolved" : "revalidate-unresolved",
-        now(),
-      ).lastInsertRowid,
-  );
+        )
+        .run(
+          threadId,
+          result.body,
+          refreshed.head_sha,
+          result.resolved ? "revalidate-resolved" : "revalidate-unresolved",
+          now(),
+        ).lastInsertRowid,
+    );
 
-  if (result.resolved) {
-    db.prepare("UPDATE threads SET status = 'resolved' WHERE id = ?").run(threadId);
-  }
+    if (result.resolved) {
+      db.prepare("UPDATE threads SET status = 'resolved' WHERE id = ?").run(threadId);
+    }
 
-  return { resolved: result.resolved, commentId };
+    return { resolved: result.resolved, commentId };
   } finally {
     await wt.cleanup();
   }
