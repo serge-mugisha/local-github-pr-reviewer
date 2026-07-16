@@ -35,7 +35,13 @@ import {
 } from "./reviewConfig.js";
 import { catalogForClient } from "./reviewCatalog.js";
 import { buildReviewInstructions } from "./providers/prompt.js";
-import { runReview, runReply, runRevalidate, setThreadStatus } from "./review.js";
+import {
+  runReview,
+  runReply,
+  runRevalidate,
+  setThreadStatus,
+  reconcileInterruptedReviews,
+} from "./review.js";
 import * as gh from "./github.js";
 import { listProviderStatus, getProvider } from "./providers/index.js";
 import { getSettings, setProvider } from "./settings.js";
@@ -266,6 +272,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     const repo = requireRepo(pr.repo_id);
     const refreshed = await hydratePR(repo, pr.number);
     const threads = listThreadsForPR(refreshed.id);
+    reconcileInterruptedReviews();
     const lastReviewRow = getDb()
       .prepare("SELECT * FROM reviews WHERE pr_id = ? ORDER BY id DESC LIMIT 1")
       .get(refreshed.id) as
@@ -373,6 +380,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   app.get("/api/prs/:prId/review/status", async (req) => {
     const { prId } = z.object({ prId: z.coerce.number() }).parse(req.params);
     if (!getPRById(prId)) throw new Error(`pr ${prId} not found`);
+    reconcileInterruptedReviews();
     const row = getDb()
       .prepare("SELECT * FROM reviews WHERE pr_id = ? ORDER BY id DESC LIMIT 1")
       .get(prId) as

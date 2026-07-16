@@ -24,6 +24,24 @@ function now(): string {
   return new Date().toISOString();
 }
 
+const REVIEW_HEARTBEAT_MS = 5_000;
+const REVIEW_STALE_AFTER_MS = 30_000;
+
+export function reconcileInterruptedReviews(): number {
+  const finishedAt = now();
+  const staleBefore = new Date(Date.now() - REVIEW_STALE_AFTER_MS).toISOString();
+  return getDb()
+    .prepare(
+      `
+      UPDATE reviews
+      SET status = 'error', finished_at = ?, error = 'Review interrupted before completion.'
+      WHERE status = 'running'
+        AND (heartbeat_at IS NULL OR heartbeat_at < ?)
+    `,
+    )
+    .run(finishedAt, staleBefore).changes;
+}
+
 function fingerprint(path: string | null, line: number | null, body: string): string {
   const head = body.replace(/\s+/g, " ").trim().slice(0, 200);
   return `${path ?? ""}|${line ?? ""}|${head}`;
@@ -44,18 +62,23 @@ export async function runReview(
   const db = getDb();
 
   const reviewInsert = db.prepare(`
-    INSERT INTO reviews (pr_id, head_sha, provider, status, started_at)
-    VALUES (?, ?, ?, 'running', ?)
+    INSERT INTO reviews (pr_id, head_sha, provider, status, started_at, heartbeat_at)
+    VALUES (?, ?, ?, 'running', ?, ?)
   `);
-  const reviewId = Number(reviewInsert.run(pr.id, pr.head_sha, providerId, now()).lastInsertRowid);
+  const startedAt = now();
+  const reviewId = Number(
+    reviewInsert.run(pr.id, pr.head_sha, providerId, startedAt, startedAt).lastInsertRowid,
+  );
+  const heartbeat = db.prepare(
+    "UPDATE reviews SET heartbeat_at = ? WHERE id = ? AND status = 'running'",
+  );
+  const heartbeatTimer = setInterval(() => heartbeat.run(now(), reviewId), REVIEW_HEARTBEAT_MS);
 
   const reviewFinish = db.prepare(`
     UPDATE reviews SET status = ?, summary = ?, finished_at = ?, error = ? WHERE id = ?
   `);
 
   try {
-    // Record the run before any network or worktree preparation. This lets a
-    // newly mounted client discover the in-progress review immediately.
     const refreshed = await hydratePR(repo, pr.number);
     db.prepare("UPDATE reviews SET head_sha = ? WHERE id = ?").run(refreshed.head_sha, reviewId);
     const diff = await gh.getPRDiff(repo.owner, repo.name, pr.number);
@@ -161,6 +184,8 @@ export async function runReview(
   } catch (e) {
     reviewFinish.run("error", null, now(), (e as Error).message, reviewId);
     throw e;
+  } finally {
+    clearInterval(heartbeatTimer);
   }
 }
 

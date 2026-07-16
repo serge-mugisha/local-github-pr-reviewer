@@ -51,6 +51,7 @@ function migrate(db: Database.Database): void {
       status TEXT NOT NULL,
       summary TEXT,
       started_at TEXT NOT NULL,
+      heartbeat_at TEXT,
       finished_at TEXT,
       error TEXT
     );
@@ -144,6 +145,11 @@ function migrate(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_prs_repo ON prs(repo_id);
     CREATE INDEX IF NOT EXISTS idx_ai_sessions_pr ON ai_sessions(pr_id);
   `);
+
+  const reviewColumns = db.pragma("table_info(reviews)") as { name: string }[];
+  if (!reviewColumns.some((column) => column.name === "heartbeat_at")) {
+    db.exec("ALTER TABLE reviews ADD COLUMN heartbeat_at TEXT");
+  }
 }
 
 // --- Row types ---
@@ -177,6 +183,7 @@ export interface ReviewRow {
   status: string;
   summary: string | null;
   started_at: string;
+  heartbeat_at: string | null;
   finished_at: string | null;
   error: string | null;
 }
