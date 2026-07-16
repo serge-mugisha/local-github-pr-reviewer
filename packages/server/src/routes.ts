@@ -370,6 +370,37 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     return diff;
   });
 
+  app.get("/api/prs/:prId/review/status", async (req) => {
+    const { prId } = z.object({ prId: z.coerce.number() }).parse(req.params);
+    if (!getPRById(prId)) throw new Error(`pr ${prId} not found`);
+    const row = getDb()
+      .prepare("SELECT * FROM reviews WHERE pr_id = ? ORDER BY id DESC LIMIT 1")
+      .get(prId) as
+      | {
+          id: number;
+          head_sha: string;
+          provider: string;
+          status: string;
+          summary: string | null;
+          started_at: string;
+          finished_at: string | null;
+          error: string | null;
+        }
+      | undefined;
+    return row
+      ? {
+          id: row.id,
+          headSha: row.head_sha,
+          provider: row.provider,
+          status: row.status,
+          summary: row.summary,
+          startedAt: row.started_at,
+          finishedAt: row.finished_at,
+          error: row.error,
+        }
+      : null;
+  });
+
   app.get("/api/prs/:prId/files", async (req) => {
     const { prId } = z.object({ prId: z.coerce.number() }).parse(req.params);
     const pr = getPRById(prId);

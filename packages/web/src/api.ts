@@ -179,6 +179,7 @@ export const api = {
   refreshPRs: (repoId: number) =>
     jsonReq<PRListItem[]>(`/api/repos/${repoId}/prs/refresh`, { method: "POST" }),
   pr: (prId: number) => jsonReq<PRDetail>(`/api/prs/${prId}`),
+  reviewStatus: (prId: number) => jsonReq<LastReview | null>(`/api/prs/${prId}/review/status`),
   diff: async (prId: number): Promise<string> => {
     const res = await fetch(`/api/prs/${prId}/diff`);
     if (!res.ok) throw new Error(await res.text());

@@ -49,6 +49,7 @@ export function PRView() {
     error: null,
   });
   const [showLog, setShowLog] = useState(false);
+  const [dismissedReviewErrorId, setDismissedReviewErrorId] = useState<number | null>(null);
   const reviewConfigRef = useRef<ReviewConfigFields | null>(null);
 
   const load = useCallback(async () => {
@@ -60,6 +61,39 @@ export function PRView() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  const persistedReviewActive = detail?.lastReview?.status === "running";
+  const reviewActive = stream.active || persistedReviewActive;
+
+  // An SSE stream belongs to the page that started it. When the user returns
+  // to this PR, follow the persisted review row until it reaches a final state.
+  useEffect(() => {
+    if (!persistedReviewActive || stream.active) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const poll = async () => {
+      try {
+        const lastReview = await api.reviewStatus(id);
+        if (cancelled) return;
+        if (lastReview?.status === "running") {
+          setDetail((current) => (current ? { ...current, lastReview } : current));
+          timer = setTimeout(poll, 2000);
+        } else {
+          await load();
+        }
+      } catch (error) {
+        console.error(error);
+        if (!cancelled) timer = setTimeout(poll, 4000);
+      }
+    };
+
+    timer = setTimeout(poll, 1000);
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [id, load, persistedReviewActive, stream.active]);
 
   const files = useMemo<PatchFile[]>(() => (diff ? splitPatchByFile(diff) : []), [diff]);
 
@@ -299,12 +333,17 @@ export function PRView() {
 
   const showAddedBanner =
     !stream.active && !stream.error && stream.result !== null && stream.result.addedThreads > 0;
+  const persistedReviewError =
+    detail.lastReview?.status === "error" && detail.lastReview.id !== dismissedReviewErrorId
+      ? detail.lastReview.error || "Review failed."
+      : null;
+  const reviewError = stream.error ?? persistedReviewError;
 
   return (
     <div className="prview">
       <ReviewSettingsPanel
         prId={id}
-        disabled={stream.active}
+        disabled={reviewActive}
         onConfigChange={(c) => {
           reviewConfigRef.current = c;
         }}
@@ -345,17 +384,17 @@ export function PRView() {
           </button>
         </div>
         {detail.threads.length > 0 && (
-          <button className="btn" onClick={clearReview} disabled={stream.active}>
+          <button className="btn" onClick={clearReview} disabled={reviewActive}>
             Clear review
           </button>
         )}
         <button
-          className={`btn primary review-btn ${stream.active ? "is-running" : ""}`}
+          className={`btn primary review-btn ${reviewActive ? "is-running" : ""}`}
           onClick={runReview}
-          disabled={stream.active}
+          disabled={reviewActive}
         >
-          {stream.active && <span className="btn-spinner" aria-hidden />}
-          {stream.active ? "Reviewing…" : detail.threads.length ? "Re-run review" : "Run review"}
+          {reviewActive && <span className="btn-spinner" aria-hidden />}
+          {reviewActive ? "Reviewing…" : detail.threads.length ? "Re-run review" : "Run review"}
         </button>
       </header>
 
@@ -383,17 +422,22 @@ export function PRView() {
         </aside>
 
         <div className="pr-main">
-          {stream.active && (
+          {reviewActive && (
             <ReviewProgress
               log={stream.log}
               showLog={showLog}
               onToggleLog={() => setShowLog((v) => !v)}
             />
           )}
-          {stream.error && !stream.active && (
+          {reviewError && !reviewActive && (
             <ReviewError
-              message={stream.error}
-              onDismiss={() => setStream((s) => ({ ...s, error: null }))}
+              message={reviewError}
+              onDismiss={() => {
+                setStream((s) => ({ ...s, error: null }));
+                if (detail.lastReview?.status === "error") {
+                  setDismissedReviewErrorId(detail.lastReview.id);
+                }
+              }}
             />
           )}
           {showAddedBanner && (
@@ -410,7 +454,7 @@ export function PRView() {
               summary={detail.summaryReview?.summary ?? null}
             />
           )}
-          {!stream.active &&
+          {!reviewActive &&
             !showAddedBanner &&
             !showEmptyBanner &&
             detail.summaryReview?.summary.trim() && (
@@ -937,7 +981,8 @@ function ThreadCard({
         {thread.status === "resolved" && <span className="pill ok">resolved</span>}
         <div className="spacer" />
         <button className="btn small" onClick={revalidate} disabled={streaming !== null}>
-          {streaming === "revalidate" ? "…" : "Revalidate"}
+          {streaming === "revalidate" && <span className="btn-spinner" aria-hidden />}
+          {streaming === "revalidate" ? "Revalidating…" : "Revalidate"}
         </button>
         <button className="btn small" onClick={toggleStatus}>
           {thread.status === "open" ? "Mark resolved" : "Reopen"}
