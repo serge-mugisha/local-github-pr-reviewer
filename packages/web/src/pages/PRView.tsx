@@ -670,7 +670,7 @@ function ReviewError({ message, onDismiss }: { message: string; onDismiss: () =>
       </span>
       <div className="review-error-text">
         <strong>Review failed.</strong>
-        <div className="muted small">{message}</div>
+        <pre className="review-error-message">{message}</pre>
       </div>
       <div className="spacer" />
       <button type="button" className="btn small ghost" onClick={onDismiss}>

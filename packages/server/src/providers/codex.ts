@@ -7,7 +7,7 @@ import type {
 } from "./types.js";
 import { buildReviewPrompt, buildReplyPrompt, buildRevalidatePrompt } from "./prompt.js";
 import { parseReviewOutput, parseRevalidateOutput } from "./parser.js";
-import { spawnCli, commandExists } from "./spawn.js";
+import { spawnCli, commandExists, formatCliFailure } from "./spawn.js";
 import { loadConfig } from "../config.js";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -81,13 +81,13 @@ async function runCodex(
     timeoutMs: 15 * 60 * 1000,
   });
   if (res.exitCode !== 0) {
-    if (isAuthError(res.stderr)) throw new Error(AUTH_HELP);
-    throw new Error(`codex exited ${res.exitCode}: ${res.stderr.slice(0, 500)}`);
+    const failure = formatCliFailure("codex", res);
+    throw new Error(isAuthError(res.combinedOutput) ? `${failure}\n\n${AUTH_HELP}` : failure);
   }
   const run = parseCodexEvents(res.stdout);
   if (!run.text.trim()) {
-    if (isAuthError(res.stderr)) throw new Error(AUTH_HELP);
-    throw new Error("codex produced no assistant output");
+    const failure = formatCliFailure("codex", res, "produced no assistant output");
+    throw new Error(isAuthError(res.combinedOutput) ? `${failure}\n\n${AUTH_HELP}` : failure);
   }
   return run;
 }

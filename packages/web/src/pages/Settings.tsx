@@ -117,8 +117,15 @@ function GeneralSettings() {
                 onChange={() => switchProvider(p.id)}
               />
               <span>{p.displayName}</span>
-              <span className={`pill ${p.available ? "ok" : "warn"}`}>
-                {p.available ? "available" : "CLI missing"}
+              <span
+                className={`pill ${p.available ? "ok" : "warn"}`}
+                title={
+                  p.available
+                    ? "Authentication is checked when the CLI runs."
+                    : "Install the CLI and ensure it is on PATH."
+                }
+              >
+                {p.available ? "CLI found" : "CLI missing"}
               </span>
             </label>
           ))}

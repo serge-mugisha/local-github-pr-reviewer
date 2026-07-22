@@ -7,7 +7,7 @@ import type {
 } from "./types.js";
 import { buildReviewPrompt, buildReplyPrompt, buildRevalidatePrompt } from "./prompt.js";
 import { parseReviewOutput, parseRevalidateOutput } from "./parser.js";
-import { spawnCli, commandExists } from "./spawn.js";
+import { spawnCli, commandExists, formatCliFailure } from "./spawn.js";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { readdir, rm } from "node:fs/promises";
@@ -45,7 +45,7 @@ async function runClaude(
     timeoutMs: 15 * 60 * 1000,
   });
   if (res.exitCode !== 0) {
-    throw new Error(`claude exited ${res.exitCode}: ${res.stderr.slice(0, 500)}`);
+    throw new Error(formatCliFailure("claude", res));
   }
   // With --output-format json, stdout is a JSON object containing `result`.
   // Parse first; check is_error *after* the catch so a reported error isn't
@@ -65,7 +65,7 @@ async function runClaude(
   }
   // Not JSON for some reason — fall back to raw stdout (no id to track).
   if (res.stdout.trim()) return { text: res.stdout, sessionIds: [] };
-  throw new Error("claude output not parseable");
+  throw new Error(formatCliFailure("claude", res, "produced no parseable output"));
 }
 
 /**

@@ -7,7 +7,7 @@ import type {
 } from "./types.js";
 import { buildReviewPrompt, buildReplyPrompt, buildRevalidatePrompt } from "./prompt.js";
 import { parseReviewOutput, parseRevalidateOutput } from "./parser.js";
-import { spawnCli, commandExists } from "./spawn.js";
+import { spawnCli, commandExists, formatCliFailure } from "./spawn.js";
 import { loadConfig } from "../config.js";
 
 /**
@@ -47,12 +47,12 @@ async function runAntigravity(
     timeoutMs: 15 * 60 * 1000,
   });
   if (res.exitCode !== 0) {
-    if (isAuthError(`${res.stderr}\n${res.stdout}`)) throw new Error(AUTH_HELP);
-    throw new Error(`agy exited ${res.exitCode}: ${res.stderr.slice(0, 500)}`);
+    const failure = formatCliFailure("agy", res);
+    throw new Error(isAuthError(res.combinedOutput) ? `${failure}\n\n${AUTH_HELP}` : failure);
   }
   if (res.stdout.trim()) return { text: res.stdout, sessionIds: [] };
-  if (isAuthError(res.stderr)) throw new Error(AUTH_HELP);
-  throw new Error("agy produced no assistant output");
+  const failure = formatCliFailure("agy", res, "produced no assistant output");
+  throw new Error(isAuthError(res.combinedOutput) ? `${failure}\n\n${AUTH_HELP}` : failure);
 }
 
 export const antigravityProvider: Provider = {

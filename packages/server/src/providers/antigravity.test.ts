@@ -7,7 +7,8 @@ const mocks = vi.hoisted(() => ({
   loadConfig: vi.fn(),
 }));
 
-vi.mock("./spawn.js", () => ({
+vi.mock("./spawn.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./spawn.js")>()),
   spawnCli: mocks.spawnCli,
   commandExists: mocks.commandExists,
 }));
@@ -125,5 +126,19 @@ describe("antigravityProvider", () => {
       "--print",
       expect.stringContaining("Why?"),
     ]);
+  });
+
+  it("retains the original auth error before suggesting a fix", async () => {
+    const cliError = "OAuth token source expired; login required";
+    mocks.spawnCli.mockResolvedValue({
+      exitCode: 1,
+      stderr: "",
+      stdout: cliError,
+      combinedOutput: cliError,
+    });
+
+    await expect(antigravityProvider.review(reviewContext())).rejects.toThrow(
+      `agy exited 1\n\n${cliError}\n\nAntigravity authentication failed.`,
+    );
   });
 });

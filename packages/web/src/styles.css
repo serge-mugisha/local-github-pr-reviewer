@@ -1839,6 +1839,18 @@ a:focus-visible {
   flex-direction: column;
   gap: 2px;
   min-width: 0;
+  flex: 1;
+}
+.review-error-message {
+  max-height: 240px;
+  margin: 4px 0 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-dim);
 }
 
 .btn.ghost {
