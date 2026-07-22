@@ -93,14 +93,8 @@ export function Home() {
               <span
                 key={p.id}
                 className={`pill ${p.available ? "ok" : "warn"} ${status.settings.provider === p.id ? "active" : ""}`}
-                title={
-                  p.available
-                    ? "CLI found on PATH. Authentication is checked when the CLI runs."
-                    : "CLI not found on PATH."
-                }
               >
-                {p.displayName}
-                {p.available ? "" : " (missing)"}
+                {p.displayName}: {p.available ? "found" : "missing"}
               </span>
             ))}
           </div>

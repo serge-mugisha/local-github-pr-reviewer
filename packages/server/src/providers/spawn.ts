@@ -1,6 +1,8 @@
 import { spawn } from "node:child_process";
 import type { ProviderProgress } from "./types.js";
 
+const MAX_FAILURE_OUTPUT_CHARS = 64 * 1024;
+
 export interface SpawnResult {
   stdout: string;
   stderr: string;
@@ -77,12 +79,17 @@ export function formatCliFailure(
   result: SpawnResult,
   reason = `exited ${result.exitCode}`,
 ): string {
-  const output = (
+  let output = (
     result.combinedOutput || [result.stderr, result.stdout].filter(Boolean).join("\n")
   ).trim();
+  if (output.length > MAX_FAILURE_OUTPUT_CHARS) {
+    const keptAtEachEnd = MAX_FAILURE_OUTPUT_CHARS / 2;
+    const omitted = output.length - MAX_FAILURE_OUTPUT_CHARS;
+    output = `${output.slice(0, keptAtEachEnd)}\n\n… ${omitted} characters omitted …\n\n${output.slice(-keptAtEachEnd)}`;
+  }
   return output
     ? `${command} ${reason}\n\n${output}`
-    : `${command} ${reason} without producing error output.`;
+    : `${command} ${reason}. The CLI wrote nothing to stdout or stderr.`;
 }
 
 export function commandExists(cmd: string): Promise<boolean> {

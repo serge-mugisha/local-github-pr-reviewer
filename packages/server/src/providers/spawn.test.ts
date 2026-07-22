@@ -31,7 +31,17 @@ describe("formatCliFailure", () => {
 
   it("explains when the CLI produced no error output", () => {
     expect(formatCliFailure("agy", result({}), "produced no assistant output")).toBe(
-      "agy produced no assistant output without producing error output.",
+      "agy produced no assistant output. The CLI wrote nothing to stdout or stderr.",
     );
+  });
+
+  it("bounds pathological output while retaining its beginning and end", () => {
+    const output = `important beginning\n${"x".repeat(70_000)}\nimportant end`;
+    const message = formatCliFailure("claude", result({ combinedOutput: output }));
+
+    expect(message).toContain("important beginning");
+    expect(message).toContain("characters omitted");
+    expect(message).toContain("important end");
+    expect(message.length).toBeLessThan(66_000);
   });
 });

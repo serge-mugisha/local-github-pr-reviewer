@@ -117,19 +117,15 @@ function GeneralSettings() {
                 onChange={() => switchProvider(p.id)}
               />
               <span>{p.displayName}</span>
-              <span
-                className={`pill ${p.available ? "ok" : "warn"}`}
-                title={
-                  p.available
-                    ? "Authentication is checked when the CLI runs."
-                    : "Install the CLI and ensure it is on PATH."
-                }
-              >
+              <span className={`pill ${p.available ? "ok" : "warn"}`}>
                 {p.available ? "CLI found" : "CLI missing"}
               </span>
             </label>
           ))}
         </div>
+        <p className="muted small">
+          “CLI found” means the executable is on PATH. Authentication is checked when a review runs.
+        </p>
         <p className="muted small">
           Provider preference applies for the current server process. To persist across restarts,
           edit <code>config.json</code> in the project root.
