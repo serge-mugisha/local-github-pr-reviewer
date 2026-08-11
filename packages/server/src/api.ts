@@ -2,6 +2,7 @@ export * from "./db.js";
 export * from "./prs.js";
 export * from "./sessions.js";
 export * from "./settings.js";
+export * from "./reviewerProvider.js";
 export * from "./providers/index.js";
 export * from "./skills.js";
 export * from "./reviewConfig.js";

@@ -132,6 +132,7 @@ const repo: RepoRow = {
   owner: "serge-mugisha",
   name: "buildmate",
   local_path: "/tmp/buildmate",
+  reviewer_provider: null,
 };
 
 beforeEach(() => {

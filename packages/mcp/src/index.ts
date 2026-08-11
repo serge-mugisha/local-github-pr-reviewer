@@ -55,7 +55,7 @@ function launchJob(type: string, promise: Promise<unknown>) {
 const server = new Server(
   {
     name: "reviewer-mcp",
-    version: "0.1.0",
+    version: "0.3.0",
   },
   {
     capabilities: {
@@ -75,7 +75,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "set_ai_provider",
-        description: "Switches the active AI reviewer provider.",
+        description: "Switches the global default AI reviewer provider.",
         inputSchema: {
           type: "object",
           properties: {
@@ -85,6 +85,38 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
           },
           required: ["providerId"],
+        },
+      },
+      {
+        name: "set_repo_reviewer_provider",
+        description:
+          "Sets or clears the default AI reviewer provider for a repository. A cleared override inherits the global default.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            repoId: { type: "number" },
+            providerId: {
+              type: ["string", "null"],
+              description: "Known provider ID, or null to inherit the global default",
+            },
+          },
+          required: ["repoId", "providerId"],
+        },
+      },
+      {
+        name: "set_pr_reviewer_provider",
+        description:
+          "Sets or clears the AI reviewer provider override for one PR. A cleared override inherits its repository default, then the global default.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            prId: { type: "number" },
+            providerId: {
+              type: ["string", "null"],
+              description: "Known provider ID, or null to inherit repository/global defaults",
+            },
+          },
+          required: ["prId", "providerId"],
         },
       },
       {
@@ -218,7 +250,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       {
         name: "trigger_review",
         description:
-          "Runs the AI review on a PR using whatever PR-specific or global config is active.",
+          "Runs the AI review using the PR provider override, repository default, or global default in that order.",
         inputSchema: {
           type: "object",
           properties: {
@@ -304,6 +336,57 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           content: [{ type: "text", text: JSON.stringify(api.getSettings(), null, 2) }],
         };
       }
+      case "set_repo_reviewer_provider": {
+        const { repoId, providerId } = z
+          .object({ repoId: z.number(), providerId: z.string().nullable() })
+          .parse(request.params.arguments);
+        const repo = requireRepo(repoId);
+        const provider = providerId ? api.getProvider(providerId).id : null;
+        api.setRepoReviewerProvider(repoId, provider);
+        const updated = requireRepo(repo.id);
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(
+                {
+                  reviewerProvider: updated.reviewer_provider,
+                  effectiveReviewerProvider: api.resolveReviewerProvider(updated).provider,
+                },
+                null,
+                2,
+              ),
+            },
+          ],
+        };
+      }
+      case "set_pr_reviewer_provider": {
+        const { prId, providerId } = z
+          .object({ prId: z.number(), providerId: z.string().nullable() })
+          .parse(request.params.arguments);
+        const pr = requirePr(prId);
+        const provider = providerId ? api.getProvider(providerId).id : null;
+        api.setPrReviewerProvider(prId, provider);
+        const updated = requirePr(pr.id);
+        const repo = requireRepo(updated.repo_id);
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(
+                {
+                  override: updated.reviewer_provider,
+                  repoOverride: repo.reviewer_provider,
+                  global: api.getSettings().provider,
+                  ...api.resolveReviewerProvider(repo, updated),
+                },
+                null,
+                2,
+              ),
+            },
+          ],
+        };
+      }
       case "manage_repositories": {
         const args = z
           .object({
@@ -314,7 +397,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           .parse(request.params.arguments);
 
         if (args.action === "list") {
-          return { content: [{ type: "text", text: JSON.stringify(api.listRepos(), null, 2) }] };
+          const repos = api.listRepos().map((repo) => ({
+            id: repo.id,
+            owner: repo.owner,
+            name: repo.name,
+            localPath: repo.local_path,
+            reviewerProvider: repo.reviewer_provider,
+            effectiveReviewerProvider: api.resolveReviewerProvider(repo).provider,
+          }));
+          return { content: [{ type: "text", text: JSON.stringify(repos, null, 2) }] };
         } else if (args.action === "add") {
           if (!args.localPath) throw new Error("localPath required for add action");
           const detected = await api.detectRepo(args.localPath);
@@ -362,7 +453,24 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const threads = api.listThreadsForPR(prId);
         return {
           content: [
-            { type: "text", text: JSON.stringify({ pr: refreshed, threads, diff }, null, 2) },
+            {
+              type: "text",
+              text: JSON.stringify(
+                {
+                  pr: refreshed,
+                  reviewerProvider: {
+                    override: refreshed.reviewer_provider,
+                    repoOverride: repo.reviewer_provider,
+                    global: api.getSettings().provider,
+                    ...api.resolveReviewerProvider(repo, refreshed),
+                  },
+                  threads,
+                  diff,
+                },
+                null,
+                2,
+              ),
+            },
           ],
         };
       }
@@ -479,7 +587,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const { prId } = z.object({ prId: z.number() }).parse(request.params.arguments);
         const pr = requirePr(prId);
         const repo = requireRepo(pr.repo_id);
-        const providerId = api.getSettings().provider;
+        const providerId = api.resolveReviewerProvider(repo, pr).provider;
 
         return launchJob("review", api.runReview({ repo, pr, providerId }));
       }
@@ -493,7 +601,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (!row) throw new McpError(ErrorCode.InvalidParams, "Thread not found");
         const pr = requirePr(row.pr_id);
         const repo = requireRepo(pr.repo_id);
-        const providerId = api.getSettings().provider;
+        const providerId = api.resolveReviewerProvider(repo, pr).provider;
 
         return launchJob(
           "reply",
@@ -508,7 +616,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (!row) throw new McpError(ErrorCode.InvalidParams, "Thread not found");
         const pr = requirePr(row.pr_id);
         const repo = requireRepo(pr.repo_id);
-        const providerId = api.getSettings().provider;
+        const providerId = api.resolveReviewerProvider(repo, pr).provider;
 
         return launchJob("revalidate", api.runRevalidate({ repo, pr, threadId, providerId }));
       }

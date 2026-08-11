@@ -676,6 +676,15 @@ pre {
   color: var(--text);
   text-decoration: none;
 }
+.pr-provider-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.reviewer-provider-select {
+  max-width: 220px;
+  font-size: 12px;
+}
 
 /* Segmented unified / split control. */
 .view-toggle {
@@ -1214,6 +1223,27 @@ pre {
 .repo-mgmt-name {
   font-weight: 600;
   letter-spacing: -0.01em;
+}
+.repo-provider-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 210px;
+}
+.repo-provider-picker select,
+.reviewer-provider-select {
+  background: var(--bg-inset);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: 7px 10px;
+  font: inherit;
+}
+.repo-provider-picker select:focus,
+.reviewer-provider-select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+  outline: none;
 }
 
 .add-repo {

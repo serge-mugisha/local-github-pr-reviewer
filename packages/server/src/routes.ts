@@ -45,6 +45,11 @@ import {
 import * as gh from "./github.js";
 import { listProviderStatus, getProvider } from "./providers/index.js";
 import { getSettings, setProvider } from "./settings.js";
+import {
+  resolveReviewerProvider,
+  setPrReviewerProvider,
+  setRepoReviewerProvider,
+} from "./reviewerProvider.js";
 import { listViewedFiles, setFileViewed } from "./viewedFiles.js";
 
 function sseInit(reply: FastifyReply): void {
@@ -93,6 +98,8 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       owner: r.owner,
       name: r.name,
       localPath: r.local_path,
+      reviewerProvider: r.reviewer_provider,
+      effectiveReviewerProvider: resolveReviewerProvider(r).provider,
     }));
   });
 
@@ -113,6 +120,19 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     syncReposFromConfig(nextCfg.repos);
     const row = findRepoByOwnerName(detected.owner, detected.name);
     return { ...detected, id: row?.id };
+  });
+
+  app.put("/api/repos/:repoId/reviewer-provider", async (req) => {
+    const { repoId } = z.object({ repoId: z.coerce.number() }).parse(req.params);
+    const body = z.object({ provider: z.string().nullable() }).parse(req.body);
+    requireRepo(repoId);
+    const provider = body.provider ? getProvider(body.provider).id : null;
+    setRepoReviewerProvider(repoId, provider);
+    const updated = requireRepo(repoId);
+    return {
+      reviewerProvider: updated.reviewer_provider,
+      effectiveReviewerProvider: resolveReviewerProvider(updated).provider,
+    };
   });
 
   app.delete("/api/repos/:repoId", async (req) => {
@@ -323,6 +343,12 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
         updatedAt: refreshed.updated_at,
       },
       repo: { id: repo.id, owner: repo.owner, name: repo.name },
+      reviewerProvider: {
+        override: refreshed.reviewer_provider,
+        repoOverride: repo.reviewer_provider,
+        global: getSettings().provider,
+        ...resolveReviewerProvider(repo, refreshed),
+      },
       threads: threads.map((t) => ({
         id: t.id,
         filePath: t.file_path,
@@ -426,6 +452,23 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     return { viewedFiles: listViewedFiles(prId, pr.head_sha) };
   });
 
+  app.put("/api/prs/:prId/reviewer-provider", async (req) => {
+    const { prId } = z.object({ prId: z.coerce.number() }).parse(req.params);
+    const body = z.object({ provider: z.string().nullable() }).parse(req.body);
+    const pr = getPRById(prId);
+    if (!pr) throw new Error(`pr ${prId} not found`);
+    const provider = body.provider ? getProvider(body.provider).id : null;
+    setPrReviewerProvider(prId, provider);
+    const updated = getPRById(prId)!;
+    const repo = requireRepo(updated.repo_id);
+    return {
+      override: updated.reviewer_provider,
+      repoOverride: repo.reviewer_provider,
+      global: getSettings().provider,
+      ...resolveReviewerProvider(repo, updated),
+    };
+  });
+
   // --- SSE actions ---
 
   app.post("/api/prs/:prId/review", async (req, reply) => {
@@ -433,7 +476,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     const pr = getPRById(prId);
     if (!pr) throw new Error(`pr ${prId} not found`);
     const repo = requireRepo(pr.repo_id);
-    const providerId = getSettings().provider;
+    const providerId = resolveReviewerProvider(repo, pr).provider;
 
     sseInit(reply);
     sseSend(reply, "log", { message: `starting review with ${providerId}…` });
@@ -465,7 +508,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     const pr = getPRById(row.pr_id);
     if (!pr) throw new Error("pr not found");
     const repo = requireRepo(pr.repo_id);
-    const providerId = getSettings().provider;
+    const providerId = resolveReviewerProvider(repo, pr).provider;
 
     sseInit(reply);
     sseSend(reply, "log", { message: `replying with ${providerId}…` });
@@ -496,7 +539,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     const pr = getPRById(row.pr_id);
     if (!pr) throw new Error("pr not found");
     const repo = requireRepo(pr.repo_id);
-    const providerId = getSettings().provider;
+    const providerId = resolveReviewerProvider(repo, pr).provider;
 
     sseInit(reply);
     sseSend(reply, "log", { message: `revalidating with ${providerId}…` });

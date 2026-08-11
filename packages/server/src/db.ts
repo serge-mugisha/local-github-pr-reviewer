@@ -23,6 +23,7 @@ function migrate(db: Database.Database): void {
       owner TEXT NOT NULL,
       name TEXT NOT NULL,
       local_path TEXT NOT NULL,
+      reviewer_provider TEXT,
       UNIQUE(owner, name)
     );
 
@@ -40,6 +41,7 @@ function migrate(db: Database.Database): void {
       url TEXT NOT NULL,
       author TEXT,
       updated_at TEXT NOT NULL,
+      reviewer_provider TEXT,
       UNIQUE(repo_id, number)
     );
 
@@ -150,6 +152,16 @@ function migrate(db: Database.Database): void {
   if (!reviewColumns.some((column) => column.name === "heartbeat_at")) {
     db.exec("ALTER TABLE reviews ADD COLUMN heartbeat_at TEXT");
   }
+
+  const repoColumns = db.pragma("table_info(repos)") as { name: string }[];
+  if (!repoColumns.some((column) => column.name === "reviewer_provider")) {
+    db.exec("ALTER TABLE repos ADD COLUMN reviewer_provider TEXT");
+  }
+
+  const prColumns = db.pragma("table_info(prs)") as { name: string }[];
+  if (!prColumns.some((column) => column.name === "reviewer_provider")) {
+    db.exec("ALTER TABLE prs ADD COLUMN reviewer_provider TEXT");
+  }
 }
 
 // --- Row types ---
@@ -159,6 +171,7 @@ export interface RepoRow {
   owner: string;
   name: string;
   local_path: string;
+  reviewer_provider: string | null;
 }
 export interface PrRow {
   id: number;
@@ -174,6 +187,7 @@ export interface PrRow {
   url: string;
   author: string | null;
   updated_at: string;
+  reviewer_provider: string | null;
 }
 export interface ReviewRow {
   id: number;

@@ -42,6 +42,7 @@ function GeneralSettings() {
   const [status, setStatus] = useState<AppStatus | null>(null);
   const [repos, setRepos] = useState<Repo[]>([]);
   const [saving, setSaving] = useState(false);
+  const [savingRepoId, setSavingRepoId] = useState<number | null>(null);
 
   async function refresh() {
     const [s, r] = await Promise.all([api.status(), api.repos()]);
@@ -72,6 +73,16 @@ function GeneralSettings() {
     await refresh();
   }
 
+  async function switchRepoProvider(repoId: number, provider: string | null) {
+    setSavingRepoId(repoId);
+    try {
+      await api.setRepoReviewerProvider(repoId, provider);
+      await refresh();
+    } finally {
+      setSavingRepoId(null);
+    }
+  }
+
   if (!status) return <div className="loading">Loading…</div>;
 
   return (
@@ -92,6 +103,27 @@ function GeneralSettings() {
                 <div className="muted small mono">{r.localPath}</div>
               </div>
               <div className="spacer" />
+              <label className="repo-provider-picker">
+                <span className="muted small">Default reviewer</span>
+                <select
+                  value={r.reviewerProvider ?? ""}
+                  disabled={savingRepoId === r.id}
+                  onChange={(e) => void switchRepoProvider(r.id, e.target.value || null)}
+                >
+                  <option value="">
+                    Global default (
+                    {status.providers.find((p) => p.id === status.settings.provider)?.displayName ??
+                      status.settings.provider}
+                    )
+                  </option>
+                  {status.providers.map((p) => (
+                    <option key={p.id} value={p.id} disabled={!p.available}>
+                      {p.displayName}
+                      {!p.available ? " — CLI missing" : ""}
+                    </option>
+                  ))}
+                </select>
+              </label>
               <button className="btn small danger" onClick={() => doRemove(r)}>
                 Remove
               </button>
@@ -105,6 +137,9 @@ function GeneralSettings() {
 
       <section>
         <h2>AI provider</h2>
+        <p className="muted small">
+          This is the global default. Repository and pull-request overrides take precedence.
+        </p>
         <div className="provider-list">
           {status.providers.map((p) => (
             <label key={p.id} className={`provider-row ${!p.available ? "disabled" : ""}`}>

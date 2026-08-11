@@ -3,6 +3,8 @@ export interface Repo {
   owner: string;
   name: string;
   localPath: string;
+  reviewerProvider: string | null;
+  effectiveReviewerProvider: string;
 }
 
 export interface PRListItem {
@@ -78,10 +80,19 @@ export interface SummaryReview {
 export interface PRDetail {
   pr: PR;
   repo: { id: number; owner: string; name: string };
+  reviewerProvider: ReviewerProviderSelection;
   threads: Thread[];
   viewedFiles: string[];
   lastReview: LastReview | null;
   summaryReview: SummaryReview | null;
+}
+
+export interface ReviewerProviderSelection {
+  override: string | null;
+  repoOverride: string | null;
+  global: string;
+  provider: string;
+  source: "pr" | "repo" | "global";
 }
 
 export interface CategoryDef {
@@ -175,10 +186,20 @@ export const api = {
       `/api/repos/${repoId}`,
       { method: "DELETE" },
     ),
+  setRepoReviewerProvider: (repoId: number, provider: string | null) =>
+    jsonReq<{ reviewerProvider: string | null; effectiveReviewerProvider: string }>(
+      `/api/repos/${repoId}/reviewer-provider`,
+      { method: "PUT", body: JSON.stringify({ provider }) },
+    ),
   prs: (repoId: number) => jsonReq<PRListItem[]>(`/api/repos/${repoId}/prs`),
   refreshPRs: (repoId: number) =>
     jsonReq<PRListItem[]>(`/api/repos/${repoId}/prs/refresh`, { method: "POST" }),
   pr: (prId: number) => jsonReq<PRDetail>(`/api/prs/${prId}`),
+  setPrReviewerProvider: (prId: number, provider: string | null) =>
+    jsonReq<ReviewerProviderSelection>(`/api/prs/${prId}/reviewer-provider`, {
+      method: "PUT",
+      body: JSON.stringify({ provider }),
+    }),
   reviewStatus: (prId: number) => jsonReq<LastReview | null>(`/api/prs/${prId}/review/status`),
   diff: async (prId: number): Promise<string> => {
     const res = await fetch(`/api/prs/${prId}/diff`);

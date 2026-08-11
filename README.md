@@ -71,6 +71,12 @@ You can also add and remove repos at runtime from the **Settings** page —
 paste a local path, the server runs `gh repo view` inside it, and the
 GitHub owner/name is auto-detected.
 
+The configured provider is the global reviewer default. In **Settings →
+Repositories**, each repo can select its own persisted default provider. On a
+PR, the **Reviewer** menu can override that provider for just that PR. Provider
+selection resolves in this order: PR override, repository default, then global
+default. Replies and revalidation use the same resolved provider as new reviews.
+
 ### Antigravity
 
 Antigravity authenticates on its own through the local app/CLI state. Install
@@ -124,6 +130,8 @@ Open `http://127.0.0.1:47823` (or `:47824` in dev).
    for a PR while keeping the PR in the list, so you can start over.
 7. Use **Skills** (per repo) to give the reviewer durable instructions:
    files to focus on, patterns to ignore, etc.
+8. Choose a **Reviewer** on the PR when it needs a one-off provider override;
+   leave it on the inherited default for the repository/global selection.
 
 When a PR is merged or closed on GitHub, all local review data for it is
 deleted on the next server launch.
