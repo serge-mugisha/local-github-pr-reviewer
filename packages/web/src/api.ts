@@ -3,8 +3,7 @@ export interface Repo {
   owner: string;
   name: string;
   localPath: string;
-  reviewerProvider: string | null;
-  effectiveReviewerProvider: string;
+  reviewerProvider: ReviewerProviderSelection;
 }
 
 export interface PRListItem {
@@ -81,6 +80,7 @@ export interface PRDetail {
   pr: PR;
   repo: { id: number; owner: string; name: string };
   reviewerProvider: ReviewerProviderSelection;
+  reviewerProviders: Pick<ProviderStatus, "id" | "displayName">[];
   threads: Thread[];
   viewedFiles: string[];
   lastReview: LastReview | null;
@@ -89,7 +89,7 @@ export interface PRDetail {
 
 export interface ReviewerProviderSelection {
   override: string | null;
-  repoOverride: string | null;
+  repoOverride?: string | null;
   global: string;
   provider: string;
   source: "pr" | "repo" | "global";
@@ -187,7 +187,7 @@ export const api = {
       { method: "DELETE" },
     ),
   setRepoReviewerProvider: (repoId: number, provider: string | null) =>
-    jsonReq<{ reviewerProvider: string | null; effectiveReviewerProvider: string }>(
+    jsonReq<{ reviewerProvider: ReviewerProviderSelection }>(
       `/api/repos/${repoId}/reviewer-provider`,
       { method: "PUT", body: JSON.stringify({ provider }) },
     ),

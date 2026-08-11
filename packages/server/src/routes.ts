@@ -43,9 +43,10 @@ import {
   reconcileInterruptedReviews,
 } from "./review.js";
 import * as gh from "./github.js";
-import { listProviderStatus, getProvider } from "./providers/index.js";
+import { listProviders, listProviderStatus, getProvider } from "./providers/index.js";
 import { getSettings, setProvider } from "./settings.js";
 import {
+  describeReviewerProvider,
   resolveReviewerProvider,
   setPrReviewerProvider,
   setRepoReviewerProvider,
@@ -98,8 +99,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       owner: r.owner,
       name: r.name,
       localPath: r.local_path,
-      reviewerProvider: r.reviewer_provider,
-      effectiveReviewerProvider: resolveReviewerProvider(r).provider,
+      reviewerProvider: describeReviewerProvider(r),
     }));
   });
 
@@ -129,10 +129,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     const provider = body.provider ? getProvider(body.provider).id : null;
     setRepoReviewerProvider(repoId, provider);
     const updated = requireRepo(repoId);
-    return {
-      reviewerProvider: updated.reviewer_provider,
-      effectiveReviewerProvider: resolveReviewerProvider(updated).provider,
-    };
+    return { reviewerProvider: describeReviewerProvider(updated) };
   });
 
   app.delete("/api/repos/:repoId", async (req) => {
@@ -343,12 +340,11 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
         updatedAt: refreshed.updated_at,
       },
       repo: { id: repo.id, owner: repo.owner, name: repo.name },
-      reviewerProvider: {
-        override: refreshed.reviewer_provider,
-        repoOverride: repo.reviewer_provider,
-        global: getSettings().provider,
-        ...resolveReviewerProvider(repo, refreshed),
-      },
+      reviewerProvider: describeReviewerProvider(repo, refreshed),
+      reviewerProviders: listProviders().map((provider) => ({
+        id: provider.id,
+        displayName: provider.displayName,
+      })),
       threads: threads.map((t) => ({
         id: t.id,
         filePath: t.file_path,
@@ -461,12 +457,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     setPrReviewerProvider(prId, provider);
     const updated = getPRById(prId)!;
     const repo = requireRepo(updated.repo_id);
-    return {
-      override: updated.reviewer_provider,
-      repoOverride: repo.reviewer_provider,
-      global: getSettings().provider,
-      ...resolveReviewerProvider(repo, updated),
-    };
+    return describeReviewerProvider(repo, updated);
   });
 
   // --- SSE actions ---

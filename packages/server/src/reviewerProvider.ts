@@ -8,6 +8,12 @@ export interface ReviewerProviderSelection {
   source: ReviewerProviderSource;
 }
 
+export interface ReviewerProviderDescription extends ReviewerProviderSelection {
+  override: string | null;
+  repoOverride?: string | null;
+  global: string;
+}
+
 export function selectReviewerProvider(
   globalProvider: string,
   repoProvider: string | null,
@@ -24,6 +30,16 @@ export function resolveReviewerProvider(repo: RepoRow, pr?: PrRow): ReviewerProv
     repo.reviewer_provider,
     pr?.reviewer_provider,
   );
+}
+
+export function describeReviewerProvider(repo: RepoRow, pr?: PrRow): ReviewerProviderDescription {
+  const global = getSettings().provider;
+  return {
+    override: pr ? pr.reviewer_provider : repo.reviewer_provider,
+    ...(pr ? { repoOverride: repo.reviewer_provider } : {}),
+    global,
+    ...selectReviewerProvider(global, repo.reviewer_provider, pr?.reviewer_provider),
+  };
 }
 
 export function setRepoReviewerProvider(repoId: number, provider: string | null): void {

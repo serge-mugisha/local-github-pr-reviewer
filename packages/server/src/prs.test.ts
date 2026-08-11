@@ -13,6 +13,7 @@ interface TestPr {
   url: string;
   author: string | null;
   updated_at: string;
+  reviewer_provider: string | null;
 }
 
 const mocks = vi.hoisted(() => ({
@@ -70,6 +71,7 @@ vi.mock("./db.js", () => ({
               url,
               author,
               updated_at: updatedAt,
+              reviewer_provider: null,
             });
             return { changes: 1 };
           },
@@ -148,6 +150,7 @@ beforeEach(() => {
       url: "https://github.com/serge-mugisha/buildmate/pull/47",
       author: "serge-mugisha",
       updated_at: "2026-01-01T00:00:00Z",
+      reviewer_provider: null,
     },
     {
       id: 2,
@@ -160,6 +163,7 @@ beforeEach(() => {
       url: "https://github.com/serge-mugisha/buildmate/pull/48",
       author: "serge-mugisha",
       updated_at: "2026-01-02T00:00:00Z",
+      reviewer_provider: "codex",
     },
   ];
   mocks.nextId = 3;
@@ -187,6 +191,7 @@ describe("refreshOpenPRs", () => {
 
     expect(refreshed.map((p) => p.number)).toEqual([48]);
     expect(mocks.prs.map((p) => p.number)).toEqual([48]);
+    expect(mocks.prs[0]?.reviewer_provider).toBe("codex");
     expect(mocks.purgeSessionsForPrs).toHaveBeenCalledTimes(1);
     expect(mocks.purgeSessionsForPrs).toHaveBeenCalledWith([1]);
   });

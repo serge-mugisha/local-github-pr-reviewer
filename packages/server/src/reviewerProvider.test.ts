@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  describeReviewerProvider,
   resolveReviewerProvider,
   selectReviewerProvider,
   setPrReviewerProvider,
@@ -54,6 +55,13 @@ describe("selectReviewerProvider", () => {
     >;
 
     expect(resolveReviewerProvider(repo, pr)).toEqual({ provider: "codex", source: "repo" });
+    expect(describeReviewerProvider(repo, pr)).toEqual({
+      override: null,
+      repoOverride: "codex",
+      global: "claude",
+      provider: "codex",
+      source: "repo",
+    });
   });
 
   it("persists and clears repository and PR overrides", () => {

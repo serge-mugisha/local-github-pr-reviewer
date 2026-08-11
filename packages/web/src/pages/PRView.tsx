@@ -3,7 +3,7 @@ import { Link, useParams } from "react-router-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { PatchDiff, type DiffLineAnnotation } from "@pierre/diffs/react";
-import { api, postSse, type AppStatus, type PRDetail, type Thread } from "../api.js";
+import { api, postSse, type PRDetail, type Thread } from "../api.js";
 import { Markdown } from "../components/Markdown.js";
 import { ReviewSettingsPanel } from "../components/ReviewSettingsPanel.js";
 import type { ReviewConfigFields } from "../components/ReviewConfigEditor.js";
@@ -41,7 +41,6 @@ export function PRView() {
   const { prId } = useParams();
   const id = Number(prId);
   const [detail, setDetail] = useState<PRDetail | null>(null);
-  const [status, setStatus] = useState<AppStatus | null>(null);
   const [savingProvider, setSavingProvider] = useState(false);
   const [diff, setDiff] = useState<string>("");
   const [stream, setStream] = useState<StreamState>({
@@ -63,13 +62,6 @@ export function PRView() {
   useEffect(() => {
     void load();
   }, [load]);
-
-  useEffect(() => {
-    void api
-      .status()
-      .then(setStatus)
-      .catch((error) => console.error(error));
-  }, []);
 
   const persistedReviewActive = detail?.lastReview?.status === "running";
   const reviewActive = stream.active || persistedReviewActive;
@@ -410,12 +402,12 @@ export function PRView() {
           <select
             className="reviewer-provider-select"
             value={detail.reviewerProvider.override ?? ""}
-            disabled={reviewActive || savingProvider || !status}
+            disabled={reviewActive || savingProvider}
             onChange={(e) => void switchReviewerProvider(e.target.value || null)}
           >
             <option value="">
               Use {detail.reviewerProvider.repoOverride ? "repo" : "global"} default (
-              {status?.providers.find(
+              {detail.reviewerProviders.find(
                 (p) =>
                   p.id === (detail.reviewerProvider.repoOverride ?? detail.reviewerProvider.global),
               )?.displayName ??
@@ -423,10 +415,9 @@ export function PRView() {
                 detail.reviewerProvider.global}
               )
             </option>
-            {status?.providers.map((p) => (
-              <option key={p.id} value={p.id} disabled={!p.available}>
+            {detail.reviewerProviders.map((p) => (
+              <option key={p.id} value={p.id}>
                 {p.displayName}
-                {!p.available ? " — CLI missing" : ""}
               </option>
             ))}
           </select>

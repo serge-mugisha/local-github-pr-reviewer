@@ -106,14 +106,14 @@ function GeneralSettings() {
               <label className="repo-provider-picker">
                 <span className="muted small">Default reviewer</span>
                 <select
-                  value={r.reviewerProvider ?? ""}
+                  value={r.reviewerProvider.override ?? ""}
                   disabled={savingRepoId === r.id}
                   onChange={(e) => void switchRepoProvider(r.id, e.target.value || null)}
                 >
                   <option value="">
                     Global default (
-                    {status.providers.find((p) => p.id === status.settings.provider)?.displayName ??
-                      status.settings.provider}
+                    {status.providers.find((p) => p.id === r.reviewerProvider.global)
+                      ?.displayName ?? r.reviewerProvider.global}
                     )
                   </option>
                   {status.providers.map((p) => (

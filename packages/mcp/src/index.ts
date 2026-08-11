@@ -350,8 +350,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               type: "text",
               text: JSON.stringify(
                 {
-                  reviewerProvider: updated.reviewer_provider,
-                  effectiveReviewerProvider: api.resolveReviewerProvider(updated).provider,
+                  reviewerProvider: api.describeReviewerProvider(updated),
                 },
                 null,
                 2,
@@ -373,16 +372,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           content: [
             {
               type: "text",
-              text: JSON.stringify(
-                {
-                  override: updated.reviewer_provider,
-                  repoOverride: repo.reviewer_provider,
-                  global: api.getSettings().provider,
-                  ...api.resolveReviewerProvider(repo, updated),
-                },
-                null,
-                2,
-              ),
+              text: JSON.stringify(api.describeReviewerProvider(repo, updated), null, 2),
             },
           ],
         };
@@ -402,8 +392,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             owner: repo.owner,
             name: repo.name,
             localPath: repo.local_path,
-            reviewerProvider: repo.reviewer_provider,
-            effectiveReviewerProvider: api.resolveReviewerProvider(repo).provider,
+            reviewerProvider: api.describeReviewerProvider(repo),
           }));
           return { content: [{ type: "text", text: JSON.stringify(repos, null, 2) }] };
         } else if (args.action === "add") {
@@ -458,12 +447,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               text: JSON.stringify(
                 {
                   pr: refreshed,
-                  reviewerProvider: {
-                    override: refreshed.reviewer_provider,
-                    repoOverride: repo.reviewer_provider,
-                    global: api.getSettings().provider,
-                    ...api.resolveReviewerProvider(repo, refreshed),
-                  },
+                  reviewerProvider: api.describeReviewerProvider(repo, refreshed),
                   threads,
                   diff,
                 },
