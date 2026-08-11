@@ -11,12 +11,12 @@ export function getDb(): Database.Database {
   const db = new Database(resolve(dataDir(), "reviewer.db"));
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
-  migrate(db);
+  migrateDatabase(db);
   dbInstance = db;
   return db;
 }
 
-function migrate(db: Database.Database): void {
+export function migrateDatabase(db: Database.Database): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS repos (
       id INTEGER PRIMARY KEY AUTOINCREMENT,

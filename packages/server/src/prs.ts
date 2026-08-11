@@ -16,22 +16,24 @@ export interface PrListItem {
   openThreads: number;
 }
 
+export const OPEN_PR_UPSERT_SQL = `
+  INSERT INTO prs (repo_id, number, title, body, head_sha, base_sha, head_ref, base_ref, state, url, author, updated_at)
+  VALUES (?, ?, ?, '', '', '', ?, ?, ?, ?, ?, ?)
+  ON CONFLICT(repo_id, number) DO UPDATE SET
+    title = excluded.title,
+    head_ref = excluded.head_ref,
+    base_ref = excluded.base_ref,
+    state = excluded.state,
+    url = excluded.url,
+    author = excluded.author,
+    updated_at = excluded.updated_at
+`;
+
 export async function refreshOpenPRs(repo: RepoRow): Promise<PrListItem[]> {
   const open = await gh.listOpenPRs(repo.owner, repo.name);
   const openNumbers = new Set(open.map((p) => p.number));
   const db = getDb();
-  const upsert = db.prepare(`
-    INSERT INTO prs (repo_id, number, title, body, head_sha, base_sha, head_ref, base_ref, state, url, author, updated_at)
-    VALUES (?, ?, ?, '', '', '', ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(repo_id, number) DO UPDATE SET
-      title = excluded.title,
-      head_ref = excluded.head_ref,
-      base_ref = excluded.base_ref,
-      state = excluded.state,
-      url = excluded.url,
-      author = excluded.author,
-      updated_at = excluded.updated_at
-  `);
+  const upsert = db.prepare(OPEN_PR_UPSERT_SQL);
   const tx = db.transaction(() => {
     for (const p of open) {
       upsert.run(
