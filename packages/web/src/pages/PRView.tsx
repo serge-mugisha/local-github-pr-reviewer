@@ -59,6 +59,30 @@ export function PRView() {
     setDiff(df);
   }, [id]);
 
+  const loadReviewSnapshot = useCallback(async () => {
+    const snapshot = await api.reviewSnapshot(id);
+    setDetail((current) => {
+      if (!current) return current;
+      const completed = snapshot.lastReview;
+      const summaryReview =
+        completed?.status === "done" && completed.summary?.trim()
+          ? {
+              id: completed.id,
+              headSha: completed.headSha,
+              provider: completed.provider,
+              summary: completed.summary,
+              finishedAt: completed.finishedAt,
+            }
+          : current.summaryReview;
+      return {
+        ...current,
+        threads: snapshot.threads,
+        lastReview: snapshot.lastReview,
+        summaryReview,
+      };
+    });
+  }, [id]);
+
   useEffect(() => {
     void load();
   }, [load]);
@@ -81,7 +105,8 @@ export function PRView() {
           setDetail((current) => (current ? { ...current, lastReview } : current));
           timer = setTimeout(poll, 2000);
         } else {
-          await load();
+          await loadReviewSnapshot();
+          void load();
         }
       } catch (error) {
         console.error(error);
@@ -94,7 +119,7 @@ export function PRView() {
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [id, load, persistedReviewActive, stream.active]);
+  }, [id, load, loadReviewSnapshot, persistedReviewActive, stream.active]);
 
   const files = useMemo<PatchFile[]>(() => (diff ? splitPatchByFile(diff) : []), [diff]);
 
@@ -317,9 +342,14 @@ export function PRView() {
       error = (e as Error).message;
     } finally {
       setStream((s) => ({ ...s, active: false, result, error }));
+      try {
+        await loadReviewSnapshot();
+      } catch (refreshError) {
+        console.error(refreshError);
+      }
       void load();
     }
-  }, [id, load]);
+  }, [id, load, loadReviewSnapshot]);
 
   const switchReviewerProvider = useCallback(
     async (provider: string | null) => {

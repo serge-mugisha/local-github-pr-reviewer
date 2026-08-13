@@ -8,21 +8,26 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import * as api from "@reviewer/server/api";
+import { reconcileReviewJob, type Job } from "./jobStatus.js";
 
 let nextJobId = 1;
-interface Job {
-  id: number;
-  status: "running" | "completed" | "error";
-  result?: unknown;
-  error?: string;
-  type: string;
-}
 const jobs = new Map<number, Job>();
 const MAX_JOBS = 100;
 
-function launchJob(type: string, promise: Promise<unknown>) {
+function launchJob(
+  type: string,
+  promise: Promise<unknown>,
+  metadata: Pick<Job, "reviewId" | "prId"> = {},
+) {
   const jobId = nextJobId++;
-  jobs.set(jobId, { id: jobId, status: "running", type });
+  const job: Job = {
+    id: jobId,
+    status: "running",
+    type,
+    startedAt: new Date().toISOString(),
+    ...metadata,
+  };
+  jobs.set(jobId, job);
 
   if (jobs.size > MAX_JOBS) {
     const oldestKeys = Array.from(jobs.keys()).slice(0, jobs.size - MAX_JOBS);
@@ -37,6 +42,7 @@ function launchJob(type: string, promise: Promise<unknown>) {
       if (job) {
         job.status = "completed";
         job.result = result;
+        job.completedAt = new Date().toISOString();
       }
     })
     .catch((error) => {
@@ -44,18 +50,33 @@ function launchJob(type: string, promise: Promise<unknown>) {
       if (job) {
         job.status = "error";
         job.error = String(error);
+        job.completedAt = new Date().toISOString();
       }
     });
 
   return {
-    content: [{ type: "text", text: JSON.stringify({ jobId, status: "running" }, null, 2) }],
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(
+          {
+            jobId,
+            status: "running",
+            reviewId: metadata.reviewId,
+            prId: metadata.prId,
+          },
+          null,
+          2,
+        ),
+      },
+    ],
   };
 }
 
 const server = new Server(
   {
     name: "reviewer-mcp",
-    version: "0.3.0",
+    version: "0.3.1",
   },
   {
     capabilities: {
@@ -157,12 +178,23 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "get_pr_details",
-        description: "Gets full PR context (diffs, viewed files, and all open comment threads).",
+        description:
+          "Gets refreshed PR context and diff from GitHub plus local review threads. For review results without network waits, use get_review_threads.",
         inputSchema: {
           type: "object",
           properties: {
             prId: { type: "number" },
           },
+          required: ["prId"],
+        },
+      },
+      {
+        name: "get_review_threads",
+        description:
+          "Returns the latest persisted review status and all locally stored threads immediately, without refreshing GitHub or fetching the diff.",
+        inputSchema: {
+          type: "object",
+          properties: { prId: { type: "number" } },
           required: ["prId"],
         },
       },
@@ -238,13 +270,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       {
         name: "get_job_status",
         description:
-          "Checks the status of an asynchronous background job (like a review or revalidation).",
+          "Checks an asynchronous job. Review jobs reconcile against persisted review state and return threads on completion; reviewId can recover status after an MCP restart.",
         inputSchema: {
           type: "object",
           properties: {
             jobId: { type: "number" },
+            reviewId: { type: "number" },
           },
-          required: ["jobId"],
+          anyOf: [{ required: ["jobId"] }, { required: ["reviewId"] }],
         },
       },
       {
@@ -458,6 +491,27 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           ],
         };
       }
+      case "get_review_threads": {
+        const { prId } = z.object({ prId: z.number() }).parse(request.params.arguments);
+        const pr = requirePr(prId);
+        const review = api.getLatestReviewForPR(prId);
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(
+                {
+                  pr,
+                  review,
+                  threads: api.listThreadsForPR(prId),
+                },
+                null,
+                2,
+              ),
+            },
+          ],
+        };
+      }
       case "clear_pr_review": {
         const { prId } = z.object({ prId: z.number() }).parse(request.params.arguments);
         requirePr(prId);
@@ -562,10 +616,57 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
       case "get_job_status": {
-        const { jobId } = z.object({ jobId: z.number() }).parse(request.params.arguments);
-        const job = jobs.get(jobId);
-        if (!job) throw new McpError(ErrorCode.InvalidParams, `Job ${jobId} not found`);
-        return { content: [{ type: "text", text: JSON.stringify(job, null, 2) }] };
+        const { jobId, reviewId: requestedReviewId } = z
+          .object({ jobId: z.number().optional(), reviewId: z.number().optional() })
+          .refine((value) => value.jobId !== undefined || value.reviewId !== undefined, {
+            message: "jobId or reviewId is required",
+          })
+          .parse(request.params.arguments);
+        const existingJob = jobId === undefined ? undefined : jobs.get(jobId);
+        const reviewId = requestedReviewId ?? existingJob?.reviewId;
+
+        if (reviewId !== undefined) {
+          if (existingJob && existingJob.type !== "review") {
+            throw new McpError(ErrorCode.InvalidParams, `Job ${existingJob.id} is not a review`);
+          }
+          if (
+            requestedReviewId !== undefined &&
+            existingJob?.reviewId !== undefined &&
+            requestedReviewId !== existingJob.reviewId
+          ) {
+            throw new McpError(
+              ErrorCode.InvalidParams,
+              `Job ${existingJob.id} belongs to review ${existingJob.reviewId}, not ${requestedReviewId}`,
+            );
+          }
+          const review = api.getReview(reviewId);
+          if (!review) {
+            throw new McpError(ErrorCode.InvalidParams, `Review ${reviewId} not found`);
+          }
+          const baseJob: Job =
+            existingJob ??
+            ({
+              id: jobId ?? review.id,
+              status: "running",
+              type: "review",
+              reviewId: review.id,
+              prId: review.pr_id,
+              startedAt: review.started_at,
+            } satisfies Job);
+          const reconciled = reconcileReviewJob(baseJob, review);
+          if (reconciled.status === "completed") {
+            reconciled.result = {
+              ...(reconciled.result as Record<string, unknown>),
+              threads: api.listThreadsForPR(review.pr_id),
+            };
+          }
+          return { content: [{ type: "text", text: JSON.stringify(reconciled, null, 2) }] };
+        }
+
+        if (!existingJob) {
+          throw new McpError(ErrorCode.InvalidParams, `Job ${jobId} not found`);
+        }
+        return { content: [{ type: "text", text: JSON.stringify(existingJob, null, 2) }] };
       }
       case "trigger_review": {
         const { prId } = z.object({ prId: z.number() }).parse(request.params.arguments);
@@ -573,7 +674,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const repo = requireRepo(pr.repo_id);
         const providerId = api.resolveReviewerProvider(repo, pr).provider;
 
-        return launchJob("review", api.runReview({ repo, pr, providerId }));
+        const started = api.startReview({ repo, pr, providerId });
+        return launchJob("review", started.completion, {
+          reviewId: started.reviewId,
+          prId,
+        });
       }
       case "reply_to_thread": {
         const { threadId, message } = z

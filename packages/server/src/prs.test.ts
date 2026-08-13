@@ -119,6 +119,7 @@ vi.mock("./db.js", () => ({
                 author: p.author,
                 updatedAt: p.updated_at,
                 hasReview: 0,
+                reviewStatus: null,
                 openThreads: 0,
               })),
         };

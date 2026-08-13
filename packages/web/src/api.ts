@@ -17,6 +17,7 @@ export interface PRListItem {
   author: string | null;
   updatedAt: string;
   hasReview: boolean;
+  reviewStatus: string | null;
   openThreads: number;
 }
 
@@ -85,6 +86,11 @@ export interface PRDetail {
   viewedFiles: string[];
   lastReview: LastReview | null;
   summaryReview: SummaryReview | null;
+}
+
+export interface ReviewSnapshot {
+  lastReview: LastReview | null;
+  threads: Thread[];
 }
 
 export interface ReviewerProviderSelection {
@@ -201,6 +207,7 @@ export const api = {
       body: JSON.stringify({ provider }),
     }),
   reviewStatus: (prId: number) => jsonReq<LastReview | null>(`/api/prs/${prId}/review/status`),
+  reviewSnapshot: (prId: number) => jsonReq<ReviewSnapshot>(`/api/prs/${prId}/review/snapshot`),
   diff: async (prId: number): Promise<string> => {
     const res = await fetch(`/api/prs/${prId}/diff`);
     if (!res.ok) throw new Error(await res.text());

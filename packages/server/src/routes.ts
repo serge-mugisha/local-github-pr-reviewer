@@ -7,6 +7,7 @@ import {
   syncReposFromConfig,
   getDb,
   type RepoRow,
+  type ReviewRow,
 } from "./db.js";
 import { addRepoToConfig, removeRepoFromConfig } from "./config.js";
 import { pickFolder } from "./folderPicker.js";
@@ -41,6 +42,7 @@ import {
   runRevalidate,
   setThreadStatus,
   reconcileInterruptedReviews,
+  getLatestReviewForPR,
 } from "./review.js";
 import * as gh from "./github.js";
 import { listProviders, listProviderStatus, getProvider } from "./providers/index.js";
@@ -75,6 +77,43 @@ function requireRepo(repoId: number): RepoRow {
   const r = getRepo(repoId);
   if (!r) throw new Error(`repo ${repoId} not found`);
   return r;
+}
+
+function reviewForClient(row: ReviewRow | undefined) {
+  return row
+    ? {
+        id: row.id,
+        headSha: row.head_sha,
+        provider: row.provider,
+        status: row.status,
+        summary: row.summary,
+        startedAt: row.started_at,
+        finishedAt: row.finished_at,
+        error: row.error,
+      }
+    : null;
+}
+
+function threadsForClient(prId: number) {
+  return listThreadsForPR(prId).map((thread) => ({
+    id: thread.id,
+    filePath: thread.file_path,
+    line: thread.line,
+    side: thread.side,
+    severity: thread.severity,
+    status: thread.status,
+    stale: !!thread.stale,
+    firstSeenSha: thread.first_seen_sha,
+    lastSeenSha: thread.last_seen_sha,
+    comments: thread.comments.map((comment) => ({
+      id: comment.id,
+      author: comment.author,
+      body: comment.body,
+      headSha: comment.head_sha,
+      kind: comment.kind,
+      createdAt: comment.created_at,
+    })),
+  }));
 }
 
 export async function registerRoutes(app: FastifyInstance): Promise<void> {
@@ -288,7 +327,6 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     if (!pr) throw new Error(`pr ${prId} not found`);
     const repo = requireRepo(pr.repo_id);
     const refreshed = await hydratePR(repo, pr.number);
-    const threads = listThreadsForPR(refreshed.id);
     reconcileInterruptedReviews();
     const lastReviewRow = getDb()
       .prepare("SELECT * FROM reviews WHERE pr_id = ? ORDER BY id DESC LIMIT 1")
@@ -345,25 +383,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
         id: provider.id,
         displayName: provider.displayName,
       })),
-      threads: threads.map((t) => ({
-        id: t.id,
-        filePath: t.file_path,
-        line: t.line,
-        side: t.side,
-        severity: t.severity,
-        status: t.status,
-        stale: !!t.stale,
-        firstSeenSha: t.first_seen_sha,
-        lastSeenSha: t.last_seen_sha,
-        comments: t.comments.map((c) => ({
-          id: c.id,
-          author: c.author,
-          body: c.body,
-          headSha: c.head_sha,
-          kind: c.kind,
-          createdAt: c.created_at,
-        })),
-      })),
+      threads: threadsForClient(refreshed.id),
       viewedFiles: listViewedFiles(refreshed.id, refreshed.head_sha),
       lastReview: lastReviewRow
         ? {
@@ -403,32 +423,17 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     const { prId } = z.object({ prId: z.coerce.number() }).parse(req.params);
     if (!getPRById(prId)) throw new Error(`pr ${prId} not found`);
     reconcileInterruptedReviews();
-    const row = getDb()
-      .prepare("SELECT * FROM reviews WHERE pr_id = ? ORDER BY id DESC LIMIT 1")
-      .get(prId) as
-      | {
-          id: number;
-          head_sha: string;
-          provider: string;
-          status: string;
-          summary: string | null;
-          started_at: string;
-          finished_at: string | null;
-          error: string | null;
-        }
-      | undefined;
-    return row
-      ? {
-          id: row.id,
-          headSha: row.head_sha,
-          provider: row.provider,
-          status: row.status,
-          summary: row.summary,
-          startedAt: row.started_at,
-          finishedAt: row.finished_at,
-          error: row.error,
-        }
-      : null;
+    return reviewForClient(getLatestReviewForPR(prId));
+  });
+
+  app.get("/api/prs/:prId/review/snapshot", async (req) => {
+    const { prId } = z.object({ prId: z.coerce.number() }).parse(req.params);
+    if (!getPRById(prId)) throw new Error(`pr ${prId} not found`);
+    reconcileInterruptedReviews();
+    return {
+      lastReview: reviewForClient(getLatestReviewForPR(prId)),
+      threads: threadsForClient(prId),
+    };
   });
 
   app.get("/api/prs/:prId/files", async (req) => {

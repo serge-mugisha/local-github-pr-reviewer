@@ -18,7 +18,7 @@ import { getPrReviewConfig, getGlobalReviewConfig } from "./reviewConfig.js";
 import * as gh from "./github.js";
 import { hydratePR } from "./prs.js";
 import { recordSessions } from "./sessions.js";
-import { preparePrHeadWorktree } from "./prWorktree.js";
+import { preparePrHeadWorktree, type PrWorktree } from "./prWorktree.js";
 
 function now(): string {
   return new Date().toISOString();
@@ -54,9 +54,27 @@ export interface RunReviewArgs {
   onProgress?: ProviderProgress;
 }
 
-export async function runReview(
-  args: RunReviewArgs,
-): Promise<{ reviewId: number; addedThreads: number; staleMarked: number }> {
+export interface RunReviewResult {
+  reviewId: number;
+  addedThreads: number;
+  staleMarked: number;
+}
+
+export interface StartedReview {
+  reviewId: number;
+  completion: Promise<RunReviewResult>;
+}
+
+function cleanupWorktreeInBackground(wt: PrWorktree): void {
+  // Review results are usable once their transaction commits. Worktree removal
+  // is housekeeping and must never delay that user-visible completion signal.
+  void wt.cleanup().catch(() => {
+    // Implementations currently report cleanup failures through onProgress,
+    // but keep this guard so a future implementation cannot reject unhandled.
+  });
+}
+
+export function startReview(args: RunReviewArgs): StartedReview {
   const { repo, pr, providerId, onProgress } = args;
   const provider = getProvider(providerId);
   const db = getDb();
@@ -69,6 +87,24 @@ export async function runReview(
   const reviewId = Number(
     reviewInsert.run(pr.id, pr.head_sha, providerId, startedAt, startedAt).lastInsertRowid,
   );
+
+  return {
+    reviewId,
+    completion: completeReview({ repo, pr, providerId, onProgress }, reviewId, provider, db),
+  };
+}
+
+export function runReview(args: RunReviewArgs): Promise<RunReviewResult> {
+  return startReview(args).completion;
+}
+
+async function completeReview(
+  args: RunReviewArgs,
+  reviewId: number,
+  provider: ReturnType<typeof getProvider>,
+  db: ReturnType<typeof getDb>,
+): Promise<RunReviewResult> {
+  const { repo, pr, providerId, onProgress } = args;
   const heartbeat = db.prepare(
     "UPDATE reviews SET heartbeat_at = ? WHERE id = ? AND status = 'running'",
   );
@@ -179,7 +215,7 @@ export async function runReview(
       reviewFinish.run("done", result.summary, now(), null, reviewId);
       return { reviewId, addedThreads: added, staleMarked };
     } finally {
-      await wt.cleanup();
+      cleanupWorktreeInBackground(wt);
     }
   } catch (e) {
     reviewFinish.run("error", null, now(), (e as Error).message, reviewId);
@@ -254,7 +290,7 @@ export async function runReply(args: ReplyArgs): Promise<{ aiCommentId: number }
 
     return { aiCommentId };
   } finally {
-    await wt.cleanup();
+    cleanupWorktreeInBackground(wt);
   }
 }
 
@@ -330,7 +366,7 @@ export async function runRevalidate(
 
     return { resolved: result.resolved, commentId };
   } finally {
-    await wt.cleanup();
+    cleanupWorktreeInBackground(wt);
   }
 }
 
@@ -342,4 +378,10 @@ export function getReview(reviewId: number): ReviewRow | undefined {
   return getDb().prepare("SELECT * FROM reviews WHERE id = ?").get(reviewId) as
     | ReviewRow
     | undefined;
+}
+
+export function getLatestReviewForPR(prId: number): ReviewRow | undefined {
+  return getDb()
+    .prepare("SELECT * FROM reviews WHERE pr_id = ? ORDER BY id DESC LIMIT 1")
+    .get(prId) as ReviewRow | undefined;
 }

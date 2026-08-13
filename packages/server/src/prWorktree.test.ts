@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
 import { preparePrHeadWorktree, pruneWorktrees } from "./prWorktree.js";
 import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
@@ -24,6 +24,10 @@ describe("preparePrHeadWorktree", () => {
     mockSpawn = spawn as any;
     mockSpawn.mockReset();
     vi.mocked(rm).mockReset();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   function setupGitMock(responses: Record<string, string>) {
@@ -92,6 +96,45 @@ describe("preparePrHeadWorktree", () => {
     const pr = { number: 42, head_sha: "test_sha" };
 
     await expect(preparePrHeadWorktree({ repo, pr })).rejects.toThrow(/does not match/);
+  });
+
+  it("terminates cleanup that exceeds its time budget", async () => {
+    vi.useFakeTimers();
+    let invocation = 0;
+    let cleanupChild: any;
+    mockSpawn.mockImplementation((_cmd: string, args: string[]) => {
+      invocation++;
+      const ee: any = new EventEmitter();
+      ee.stdout = new EventEmitter();
+      ee.stderr = new EventEmitter();
+      ee.kill = vi.fn();
+
+      if (invocation < 4) {
+        const out = args[0] === "rev-parse" ? "test_sha" : "";
+        queueMicrotask(() => {
+          ee.stdout.emit("data", Buffer.from(out));
+          ee.emit("close", 0);
+        });
+      } else {
+        cleanupChild = ee;
+      }
+      return ee;
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const wt = await preparePrHeadWorktree({
+      repo: { id: 1, owner: "o", name: "n", local_path: "/local" } as any,
+      pr: { number: 42, head_sha: "test_sha" },
+    });
+    const cleanup = wt.cleanup();
+    await vi.advanceTimersByTimeAsync(30_000);
+    await cleanup;
+
+    expect(cleanupChild.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("timed out after 30000ms"));
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(cleanupChild.kill).toHaveBeenCalledWith("SIGKILL");
+    errorSpy.mockRestore();
   });
 
   it("prunes worktrees", async () => {

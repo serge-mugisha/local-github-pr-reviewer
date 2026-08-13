@@ -11,11 +11,31 @@ export interface PrWorktree {
   cleanup(): Promise<void>;
 }
 
-function runGit(args: string[], cwd: string, onProgress?: ProviderProgress): Promise<string> {
+const WORKTREE_CLEANUP_TIMEOUT_MS = 30_000;
+
+function runGit(
+  args: string[],
+  cwd: string,
+  onProgress?: ProviderProgress,
+  timeoutMs?: number,
+): Promise<string> {
   return new Promise((resolveP, rejectP) => {
     const child = spawn("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
+    let settled = false;
+    let timer: NodeJS.Timeout | undefined;
+    let forceKillTimer: NodeJS.Timeout | undefined;
+
+    if (timeoutMs) {
+      timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        child.kill("SIGTERM");
+        forceKillTimer = setTimeout(() => child.kill("SIGKILL"), 2_000);
+        rejectP(new Error(`git ${args.join(" ")} timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+    }
     child.stdout.on("data", (b) => {
       const s = b.toString();
       stdout += s;
@@ -27,13 +47,23 @@ function runGit(args: string[], cwd: string, onProgress?: ProviderProgress): Pro
       onProgress?.({ type: "stderr", data: s });
     });
     child.on("close", (code) => {
+      if (timer) clearTimeout(timer);
+      if (forceKillTimer) clearTimeout(forceKillTimer);
+      if (settled) return;
+      settled = true;
       if (code !== 0) {
         rejectP(new Error(`git ${args.join(" ")} exited ${code}: ${stderr.trim()}`));
         return;
       }
       resolveP(stdout.trim());
     });
-    child.on("error", rejectP);
+    child.on("error", (error) => {
+      if (timer) clearTimeout(timer);
+      if (forceKillTimer) clearTimeout(forceKillTimer);
+      if (settled) return;
+      settled = true;
+      rejectP(error);
+    });
   });
 }
 
@@ -100,9 +130,16 @@ export async function preparePrHeadWorktree(args: {
     cwd: worktreePath,
     cleanup: async () => {
       try {
-        await runGit(["worktree", "remove", "--force", worktreePath], repo.local_path, onProgress);
+        await runGit(
+          ["worktree", "remove", "--force", worktreePath],
+          repo.local_path,
+          undefined,
+          WORKTREE_CLEANUP_TIMEOUT_MS,
+        );
       } catch (e) {
-        onProgress?.({ type: "stderr", data: `Cleanup failed: ${(e as Error).message}` });
+        // Cleanup runs after the review completion signal, so its original SSE
+        // progress stream may already be closed. Report it to the process log.
+        console.error(`Reviewer worktree cleanup failed: ${(e as Error).message}`);
       }
     },
   };

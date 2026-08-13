@@ -13,8 +13,23 @@ export interface PrListItem {
   author: string | null;
   updatedAt: string;
   hasReview: boolean;
+  reviewStatus: string | null;
   openThreads: number;
 }
+
+export const LIST_PRS_SQL = `
+  SELECT
+    p.id, p.number, p.title, p.state, p.head_ref AS headRef, p.base_ref AS baseRef,
+    p.url, p.author, p.updated_at AS updatedAt,
+    EXISTS(
+      SELECT 1 FROM reviews r WHERE r.pr_id = p.id AND r.status = 'done'
+    ) AS hasReview,
+    (SELECT r.status FROM reviews r WHERE r.pr_id = p.id ORDER BY r.id DESC LIMIT 1) AS reviewStatus,
+    (SELECT COUNT(*) FROM threads t WHERE t.pr_id = p.id AND t.status = 'open') AS openThreads
+  FROM prs p
+  WHERE p.repo_id = ?
+  ORDER BY p.number DESC
+`;
 
 export const OPEN_PR_UPSERT_SQL = `
   INSERT INTO prs (repo_id, number, title, body, head_sha, base_sha, head_ref, base_ref, state, url, author, updated_at)
@@ -63,20 +78,9 @@ export async function refreshOpenPRs(repo: RepoRow): Promise<PrListItem[]> {
 
 export function listPRsForRepo(repoId: number): PrListItem[] {
   const db = getDb();
-  const rows = db
-    .prepare(
-      `
-    SELECT
-      p.id, p.number, p.title, p.state, p.head_ref AS headRef, p.base_ref AS baseRef,
-      p.url, p.author, p.updated_at AS updatedAt,
-      EXISTS(SELECT 1 FROM reviews r WHERE r.pr_id = p.id) AS hasReview,
-      (SELECT COUNT(*) FROM threads t WHERE t.pr_id = p.id AND t.status = 'open') AS openThreads
-    FROM prs p
-    WHERE p.repo_id = ?
-    ORDER BY p.number DESC
-  `,
-    )
-    .all(repoId) as (Omit<PrListItem, "hasReview"> & { hasReview: 0 | 1 })[];
+  const rows = db.prepare(LIST_PRS_SQL).all(repoId) as (Omit<PrListItem, "hasReview"> & {
+    hasReview: 0 | 1;
+  })[];
   return rows.map((r) => ({ ...r, hasReview: !!r.hasReview }));
 }
 
