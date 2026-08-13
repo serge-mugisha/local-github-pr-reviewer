@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { resolve } from "node:path";
-import { rm } from "node:fs/promises";
+import { readdir, rm, stat } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { dataDir } from "./config.js";
 import type { RepoRow, PrRow } from "./db.js";
@@ -12,6 +12,7 @@ export interface PrWorktree {
 }
 
 const WORKTREE_CLEANUP_TIMEOUT_MS = 30_000;
+const STALE_WORKTREE_AFTER_MS = 30 * 60 * 1_000;
 
 function runGit(
   args: string[],
@@ -85,6 +86,61 @@ export async function pruneWorktrees(repos: RepoRow[]): Promise<void> {
   } catch {
     // ignore
   }
+}
+
+/**
+ * Recover abandoned Reviewer worktrees without touching a checkout that may
+ * belong to another active MCP process. Provider runs are capped at 15 minutes,
+ * so a 30-minute-old worktree can no longer be part of a live review.
+ */
+export async function pruneStaleWorktrees(
+  repos: RepoRow[],
+  staleAfterMs = STALE_WORKTREE_AFTER_MS,
+): Promise<number> {
+  const cutoff = Date.now() - staleAfterMs;
+  let removed = 0;
+
+  for (const repo of repos) {
+    const repoWorktrees = resolve(dataDir(), `worktrees/repo-${repo.id}`);
+    let entries;
+    try {
+      entries = await readdir(repoWorktrees, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const worktreePath = resolve(repoWorktrees, entry.name);
+      try {
+        const info = await stat(worktreePath);
+        if (info.mtimeMs >= cutoff) continue;
+        try {
+          await runGit(
+            ["worktree", "remove", "--force", worktreePath],
+            repo.local_path,
+            undefined,
+            WORKTREE_CLEANUP_TIMEOUT_MS,
+          );
+        } catch {
+          // The checkout may have outlived its git metadata. It is still safe
+          // to remove because it is Reviewer-owned and older than the cap.
+          await rm(worktreePath, { recursive: true, force: true });
+        }
+        removed++;
+      } catch (error) {
+        console.error(`Reviewer stale worktree cleanup failed: ${String(error)}`);
+      }
+    }
+
+    try {
+      await runGit(["worktree", "prune"], repo.local_path, undefined, WORKTREE_CLEANUP_TIMEOUT_MS);
+    } catch (error) {
+      console.error(`Reviewer worktree metadata pruning failed: ${String(error)}`);
+    }
+  }
+
+  return removed;
 }
 
 export async function preparePrHeadWorktree(args: {

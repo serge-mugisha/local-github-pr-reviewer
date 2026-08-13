@@ -15,7 +15,7 @@ describe("LIST_PRS_SQL", () => {
        (id, repo_id, number, title, head_sha, base_sha, head_ref, base_ref, state, url, updated_at)
        VALUES (?, 1, ?, 'PR', 'head', 'base', 'feature', 'main', 'OPEN', 'url', 'now')`,
     );
-    for (let id = 1; id <= 4; id++) insertPr.run(id, id);
+    for (let id = 1; id <= 5; id++) insertPr.run(id, id);
 
     const insertReview = db.prepare(
       `INSERT INTO reviews (pr_id, head_sha, provider, status, started_at)
@@ -25,6 +25,8 @@ describe("LIST_PRS_SQL", () => {
     insertReview.run(3, "error");
     insertReview.run(4, "error");
     insertReview.run(4, "done");
+    insertReview.run(5, "done");
+    insertReview.run(5, "error");
 
     const rows = db.prepare(LIST_PRS_SQL).all(1) as Array<{
       id: number;
@@ -35,6 +37,7 @@ describe("LIST_PRS_SQL", () => {
     expect(
       rows.map(({ id, hasReview, reviewStatus }) => ({ id, hasReview, reviewStatus })),
     ).toEqual([
+      { id: 5, hasReview: 1, reviewStatus: "error" },
       { id: 4, hasReview: 1, reviewStatus: "done" },
       { id: 3, hasReview: 0, reviewStatus: "error" },
       { id: 2, hasReview: 0, reviewStatus: "running" },

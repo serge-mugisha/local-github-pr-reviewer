@@ -189,12 +189,14 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   app.get("/api/repos/:repoId/prs", async (req) => {
     const { repoId } = z.object({ repoId: z.coerce.number() }).parse(req.params);
     requireRepo(repoId);
+    reconcileInterruptedReviews();
     return listPRsForRepo(repoId);
   });
 
   app.post("/api/repos/:repoId/prs/refresh", async (req) => {
     const { repoId } = z.object({ repoId: z.coerce.number() }).parse(req.params);
     const repo = requireRepo(repoId);
+    reconcileInterruptedReviews();
     return refreshOpenPRs(repo);
   });
 

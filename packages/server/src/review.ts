@@ -69,8 +69,7 @@ function cleanupWorktreeInBackground(wt: PrWorktree): void {
   // Review results are usable once their transaction commits. Worktree removal
   // is housekeeping and must never delay that user-visible completion signal.
   void wt.cleanup().catch(() => {
-    // Implementations currently report cleanup failures through onProgress,
-    // but keep this guard so a future implementation cannot reject unhandled.
+    // Keep a future cleanup implementation from rejecting unhandled.
   });
 }
 

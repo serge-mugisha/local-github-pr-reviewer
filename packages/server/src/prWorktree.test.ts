@@ -1,14 +1,15 @@
 import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
-import { preparePrHeadWorktree, pruneWorktrees } from "./prWorktree.js";
+import { preparePrHeadWorktree, pruneStaleWorktrees, pruneWorktrees } from "./prWorktree.js";
 import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { rm } from "node:fs/promises";
+import { readdir, rm, stat } from "node:fs/promises";
 
 vi.mock("node:child_process", () => ({
   spawn: vi.fn(),
 }));
 
 vi.mock("node:fs/promises", () => ({
+  readdir: vi.fn().mockRejectedValue(new Error("enoent")),
   stat: vi.fn().mockRejectedValue(new Error("enoent")),
   rm: vi.fn().mockResolvedValue(undefined),
 }));
@@ -23,6 +24,8 @@ describe("preparePrHeadWorktree", () => {
   beforeEach(() => {
     mockSpawn = spawn as any;
     mockSpawn.mockReset();
+    vi.mocked(readdir).mockReset().mockRejectedValue(new Error("enoent"));
+    vi.mocked(stat).mockReset().mockRejectedValue(new Error("enoent"));
     vi.mocked(rm).mockReset();
   });
 
@@ -155,5 +158,30 @@ describe("preparePrHeadWorktree", () => {
       expect.objectContaining({ cwd: "/local2" }),
     );
     expect(rm).toHaveBeenCalledWith("/data/worktrees", expect.any(Object));
+  });
+
+  it("prunes only stale Reviewer worktrees", async () => {
+    setupGitMock({});
+    vi.mocked(readdir).mockResolvedValue([
+      { name: "old-review", isDirectory: () => true },
+      { name: "active-review", isDirectory: () => true },
+    ] as any);
+    vi.mocked(stat)
+      .mockResolvedValueOnce({ mtimeMs: 0 } as any)
+      .mockResolvedValueOnce({ mtimeMs: Date.now() } as any);
+    const repo = { id: 1, local_path: "/local" } as any;
+
+    await expect(pruneStaleWorktrees([repo], 1_000)).resolves.toBe(1);
+
+    expect(mockSpawn).toHaveBeenCalledWith(
+      "git",
+      ["worktree", "remove", "--force", "/data/worktrees/repo-1/old-review"],
+      expect.any(Object),
+    );
+    expect(mockSpawn).not.toHaveBeenCalledWith(
+      "git",
+      ["worktree", "remove", "--force", "/data/worktrees/repo-1/active-review"],
+      expect.any(Object),
+    );
   });
 });

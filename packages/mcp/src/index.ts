@@ -461,6 +461,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case "list_prs": {
         const { repoId } = z.object({ repoId: z.number() }).parse(request.params.arguments);
         requireRepo(repoId);
+        api.reconcileInterruptedReviews();
         await api.refreshOpenPRs(requireRepo(repoId)); // auto-refresh to be helpful
         return {
           content: [{ type: "text", text: JSON.stringify(api.listPRsForRepo(repoId), null, 2) }],
@@ -494,6 +495,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case "get_review_threads": {
         const { prId } = z.object({ prId: z.number() }).parse(request.params.arguments);
         const pr = requirePr(prId);
+        api.reconcileInterruptedReviews();
         const review = api.getLatestReviewForPR(prId);
         return {
           content: [
@@ -639,8 +641,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               `Job ${existingJob.id} belongs to review ${existingJob.reviewId}, not ${requestedReviewId}`,
             );
           }
+          api.reconcileInterruptedReviews();
           const review = api.getReview(reviewId);
           if (!review) {
+            if (existingJob && requestedReviewId === undefined) {
+              return {
+                content: [{ type: "text", text: JSON.stringify(existingJob, null, 2) }],
+              };
+            }
             throw new McpError(ErrorCode.InvalidParams, `Review ${reviewId} not found`);
           }
           const baseJob: Job =
@@ -734,6 +742,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 });
 
 async function main() {
+  const pruneStale = () =>
+    api.pruneStaleWorktrees(api.listRepos()).catch((error) => {
+      console.error(`Reviewer MCP worktree pruning failed: ${String(error)}`);
+    });
+  void pruneStale();
+  const pruneTimer = setInterval(() => void pruneStale(), 30 * 60 * 1_000);
+  pruneTimer.unref();
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error("Reviewer MCP server running on stdio");

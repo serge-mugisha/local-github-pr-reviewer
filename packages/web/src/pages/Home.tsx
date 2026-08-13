@@ -167,13 +167,9 @@ export function Home() {
                     </span>
                     {p.author && <span className="muted small">{p.author}</span>}
                     <div className="spacer" />
-                    {p.reviewStatus === "running" ? (
-                      <span className="pill">reviewing</span>
-                    ) : p.reviewStatus === "error" ? (
-                      <span className="pill warn">review failed</span>
-                    ) : (
-                      p.hasReview && <span className="pill ok">reviewed</span>
-                    )}
+                    {p.hasReview && <span className="pill ok">reviewed</span>}
+                    {p.reviewStatus === "running" && <span className="pill">reviewing</span>}
+                    {p.reviewStatus === "error" && <span className="pill warn">review failed</span>}
                     {p.openThreads > 0 && <span className="pill">{p.openThreads} open</span>}
                   </li>
                 ))}
