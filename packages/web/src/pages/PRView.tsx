@@ -59,29 +59,33 @@ export function PRView() {
     setDiff(df);
   }, [id]);
 
-  const loadReviewSnapshot = useCallback(async () => {
-    const snapshot = await api.reviewSnapshot(id);
-    setDetail((current) => {
-      if (!current) return current;
-      const completed = snapshot.lastReview;
-      const summaryReview =
-        completed?.status === "done" && completed.summary?.trim()
-          ? {
-              id: completed.id,
-              headSha: completed.headSha,
-              provider: completed.provider,
-              summary: completed.summary,
-              finishedAt: completed.finishedAt,
-            }
-          : current.summaryReview;
-      return {
-        ...current,
-        threads: snapshot.threads,
-        lastReview: snapshot.lastReview,
-        summaryReview,
-      };
-    });
-  }, [id]);
+  const loadReviewSnapshot = useCallback(
+    async (isCancelled: () => boolean = () => false) => {
+      const snapshot = await api.reviewSnapshot(id);
+      if (isCancelled()) return;
+      setDetail((current) => {
+        if (!current) return current;
+        const completed = snapshot.lastReview;
+        const summaryReview =
+          completed?.status === "done" && completed.summary?.trim()
+            ? {
+                id: completed.id,
+                headSha: completed.headSha,
+                provider: completed.provider,
+                summary: completed.summary,
+                finishedAt: completed.finishedAt,
+              }
+            : current.summaryReview;
+        return {
+          ...current,
+          threads: snapshot.threads,
+          lastReview: snapshot.lastReview,
+          summaryReview,
+        };
+      });
+    },
+    [id],
+  );
 
   useEffect(() => {
     void load();
@@ -105,8 +109,7 @@ export function PRView() {
           setDetail((current) => (current ? { ...current, lastReview } : current));
           timer = setTimeout(poll, 2000);
         } else {
-          await loadReviewSnapshot();
-          void load();
+          await loadReviewSnapshot(() => cancelled);
         }
       } catch (error) {
         console.error(error);
@@ -119,7 +122,7 @@ export function PRView() {
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [id, load, loadReviewSnapshot, persistedReviewActive, stream.active]);
+  }, [id, loadReviewSnapshot, persistedReviewActive, stream.active]);
 
   const files = useMemo<PatchFile[]>(() => (diff ? splitPatchByFile(diff) : []), [diff]);
 
@@ -347,7 +350,7 @@ export function PRView() {
       } catch (refreshError) {
         console.error(refreshError);
       }
-      void load();
+      void load().catch(console.error);
     }
   }, [id, load, loadReviewSnapshot]);
 

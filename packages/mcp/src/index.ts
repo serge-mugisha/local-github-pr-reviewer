@@ -8,7 +8,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import * as api from "@reviewer/server/api";
-import { reconcileReviewJob, type Job } from "./jobStatus.js";
+import { resolveJobStatus, type Job } from "./jobStatus.js";
 
 let nextJobId = 1;
 const jobs = new Map<number, Job>();
@@ -517,7 +517,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case "clear_pr_review": {
         const { prId } = z.object({ prId: z.number() }).parse(request.params.arguments);
         requirePr(prId);
-        api.clearReviewData(prId);
+        await api.clearReviewData(prId);
         return { content: [{ type: "text", text: "Review data cleared." }] };
       }
       case "manage_review_presets": {
@@ -624,57 +624,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             message: "jobId or reviewId is required",
           })
           .parse(request.params.arguments);
-        const existingJob = jobId === undefined ? undefined : jobs.get(jobId);
-        const reviewId = requestedReviewId ?? existingJob?.reviewId;
-
-        if (reviewId !== undefined) {
-          if (existingJob && existingJob.type !== "review") {
-            throw new McpError(ErrorCode.InvalidParams, `Job ${existingJob.id} is not a review`);
-          }
-          if (
-            requestedReviewId !== undefined &&
-            existingJob?.reviewId !== undefined &&
-            requestedReviewId !== existingJob.reviewId
-          ) {
-            throw new McpError(
-              ErrorCode.InvalidParams,
-              `Job ${existingJob.id} belongs to review ${existingJob.reviewId}, not ${requestedReviewId}`,
-            );
-          }
-          api.reconcileInterruptedReviews();
-          const review = api.getReview(reviewId);
-          if (!review) {
-            if (existingJob && requestedReviewId === undefined) {
-              return {
-                content: [{ type: "text", text: JSON.stringify(existingJob, null, 2) }],
-              };
-            }
-            throw new McpError(ErrorCode.InvalidParams, `Review ${reviewId} not found`);
-          }
-          const baseJob: Job =
-            existingJob ??
-            ({
-              id: jobId ?? review.id,
-              status: "running",
-              type: "review",
-              reviewId: review.id,
-              prId: review.pr_id,
-              startedAt: review.started_at,
-            } satisfies Job);
-          const reconciled = reconcileReviewJob(baseJob, review);
-          if (reconciled.status === "completed") {
-            reconciled.result = {
-              ...(reconciled.result as Record<string, unknown>),
-              threads: api.listThreadsForPR(review.pr_id),
-            };
-          }
-          return { content: [{ type: "text", text: JSON.stringify(reconciled, null, 2) }] };
-        }
-
-        if (!existingJob) {
-          throw new McpError(ErrorCode.InvalidParams, `Job ${jobId} not found`);
-        }
-        return { content: [{ type: "text", text: JSON.stringify(existingJob, null, 2) }] };
+        const resolved = resolveJobStatus(
+          { jobId, reviewId: requestedReviewId },
+          {
+            getJob: (id) => jobs.get(id),
+            getReview: api.getReview,
+            getThreads: api.listThreadsForPR,
+            reconcileInterruptedReviews: api.reconcileInterruptedReviews,
+          },
+        );
+        return { content: [{ type: "text", text: JSON.stringify(resolved, null, 2) }] };
       }
       case "trigger_review": {
         const { prId } = z.object({ prId: z.number() }).parse(request.params.arguments);

@@ -330,20 +330,6 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     const repo = requireRepo(pr.repo_id);
     const refreshed = await hydratePR(repo, pr.number);
     reconcileInterruptedReviews();
-    const lastReviewRow = getDb()
-      .prepare("SELECT * FROM reviews WHERE pr_id = ? ORDER BY id DESC LIMIT 1")
-      .get(refreshed.id) as
-      | {
-          id: number;
-          head_sha: string;
-          provider: string;
-          status: string;
-          summary: string | null;
-          started_at: string;
-          finished_at: string | null;
-          error: string | null;
-        }
-      | undefined;
     const summaryReviewRow = getDb()
       .prepare(
         `
@@ -387,18 +373,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       })),
       threads: threadsForClient(refreshed.id),
       viewedFiles: listViewedFiles(refreshed.id, refreshed.head_sha),
-      lastReview: lastReviewRow
-        ? {
-            id: lastReviewRow.id,
-            headSha: lastReviewRow.head_sha,
-            provider: lastReviewRow.provider,
-            status: lastReviewRow.status,
-            summary: lastReviewRow.summary,
-            startedAt: lastReviewRow.started_at,
-            finishedAt: lastReviewRow.finished_at,
-            error: lastReviewRow.error,
-          }
-        : null,
+      lastReview: reviewForClient(getLatestReviewForPR(refreshed.id)),
       summaryReview: summaryReviewRow
         ? {
             id: summaryReviewRow.id,
