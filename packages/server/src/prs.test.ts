@@ -12,6 +12,9 @@ interface TestPr {
   state: string;
   url: string;
   author: string | null;
+  assignees: string;
+  review_requests: string;
+  created_at: string;
   updated_at: string;
   reviewer_provider: string | null;
 }
@@ -45,6 +48,9 @@ vi.mock("./db.js", () => ({
             state: string,
             url: string,
             author: string | null,
+            assignees: string,
+            requestedReviewers: string,
+            createdAt: string,
             updatedAt: string,
           ) => {
             const existing = mocks.prs.find((p) => p.repo_id === repoId && p.number === number);
@@ -56,6 +62,9 @@ vi.mock("./db.js", () => ({
                 state,
                 url,
                 author,
+                assignees,
+                review_requests: requestedReviewers,
+                created_at: createdAt,
                 updated_at: updatedAt,
               });
               return { changes: 1 };
@@ -70,6 +79,9 @@ vi.mock("./db.js", () => ({
               state,
               url,
               author,
+              assignees,
+              review_requests: requestedReviewers,
+              created_at: createdAt,
               updated_at: updatedAt,
               reviewer_provider: null,
             });
@@ -117,6 +129,9 @@ vi.mock("./db.js", () => ({
                 baseRef: p.base_ref,
                 url: p.url,
                 author: p.author,
+                assignees: p.assignees,
+                requestedReviewers: p.review_requests,
+                createdAt: p.created_at,
                 updatedAt: p.updated_at,
                 hasReview: 0,
                 reviewStatus: null,
@@ -150,6 +165,9 @@ beforeEach(() => {
       state: "OPEN",
       url: "https://github.com/serge-mugisha/buildmate/pull/47",
       author: "serge-mugisha",
+      assignees: "[]",
+      review_requests: "[]",
+      created_at: "2026-01-01T00:00:00Z",
       updated_at: "2026-01-01T00:00:00Z",
       reviewer_provider: null,
     },
@@ -163,6 +181,9 @@ beforeEach(() => {
       state: "OPEN",
       url: "https://github.com/serge-mugisha/buildmate/pull/48",
       author: "serge-mugisha",
+      assignees: "[]",
+      review_requests: "[]",
+      created_at: "2026-01-02T00:00:00Z",
       updated_at: "2026-01-02T00:00:00Z",
       reviewer_provider: "codex",
     },
@@ -183,8 +204,11 @@ describe("refreshOpenPRs", () => {
         baseRefName: "main",
         url: "https://github.com/serge-mugisha/buildmate/pull/48",
         isDraft: false,
+        createdAt: "2026-01-02T00:00:00Z",
         updatedAt: "2026-01-02T00:00:00Z",
         author: { login: "serge-mugisha" },
+        assignees: [],
+        reviewRequests: [{ login: "reviewer" }],
       },
     ]);
 
@@ -193,6 +217,7 @@ describe("refreshOpenPRs", () => {
     expect(refreshed.map((p) => p.number)).toEqual([48]);
     expect(mocks.prs.map((p) => p.number)).toEqual([48]);
     expect(mocks.prs[0]?.reviewer_provider).toBe("codex");
+    expect(mocks.prs[0]?.review_requests).toBe('["reviewer"]');
     expect(mocks.purgeSessionsForPrs).toHaveBeenCalledTimes(1);
     expect(mocks.purgeSessionsForPrs).toHaveBeenCalledWith([1]);
   });

@@ -303,6 +303,55 @@ export function PRView() {
     el.scrollIntoView({ behavior: "smooth", block: "start" });
   }, []);
 
+  // Thread anchors live inside the rendered diffs. A pending jump first
+  // reopens a collapsed file, then waits for its annotation to mount.
+  const threadRefs = useRef<Map<number, HTMLElement>>(new Map());
+  const [pendingThreadJump, setPendingThreadJump] = useState<{
+    path: string;
+    threadId: number;
+  } | null>(null);
+  const [focusedThreadId, setFocusedThreadId] = useState<number | null>(null);
+  const registerThreadEl = useCallback((threadId: number, el: HTMLElement | null) => {
+    if (el) threadRefs.current.set(threadId, el);
+    else threadRefs.current.delete(threadId);
+  }, []);
+  const scrollToThread = useCallback((path: string, threadId: number) => {
+    setCollapsedByFile((current) => {
+      if (!current.has(path)) return current;
+      const next = new Set(current);
+      next.delete(path);
+      return next;
+    });
+    setPendingThreadJump({ path, threadId });
+  }, []);
+
+  useEffect(() => {
+    if (!pendingThreadJump || collapsedByFile.has(pendingThreadJump.path)) return;
+    let frame = 0;
+    let attempts = 0;
+    const seek = () => {
+      const el = threadRefs.current.get(pendingThreadJump.threadId);
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        el.focus({ preventScroll: true });
+        setFocusedThreadId(pendingThreadJump.threadId);
+        setPendingThreadJump(null);
+        return;
+      }
+      attempts += 1;
+      if (attempts < 12) frame = requestAnimationFrame(seek);
+      else setPendingThreadJump(null);
+    };
+    frame = requestAnimationFrame(seek);
+    return () => cancelAnimationFrame(frame);
+  }, [collapsedByFile, pendingThreadJump]);
+
+  useEffect(() => {
+    if (focusedThreadId == null) return;
+    const timer = window.setTimeout(() => setFocusedThreadId(null), 1800);
+    return () => window.clearTimeout(timer);
+  }, [focusedThreadId]);
+
   const clearReview = useCallback(async () => {
     const ok = window.confirm(
       "Delete all threads, comments, and review history for this PR? The PR stays in the list so you can run a fresh review.",
@@ -488,6 +537,7 @@ export function PRView() {
               threadsByFile={threadsByFile}
               viewedSet={viewedSet}
               onJump={scrollToFile}
+              onThreadJump={scrollToThread}
               onCollapse={toggleSidenav}
             />
           )}
@@ -570,6 +620,7 @@ export function PRView() {
                 file={f}
                 repoId={detail.repo.id}
                 registerRef={registerFileEl}
+                registerThreadRef={registerThreadEl}
                 annotations={annByFile.get(f.path) ?? []}
                 fileThreads={fileLevelByFile.get(f.path) ?? []}
                 allThreads={threadsByFile.get(f.path) ?? []}
@@ -580,6 +631,7 @@ export function PRView() {
                 collapsed={collapsedByFile.has(f.path)}
                 onToggleCollapsed={() => toggleCollapsed(f.path)}
                 onChange={load}
+                focusedThreadId={focusedThreadId}
               />
             ))}
           </section>
@@ -626,15 +678,18 @@ function SideNav({
   threadsByFile,
   viewedSet,
   onJump,
+  onThreadJump,
   onCollapse,
 }: {
   files: PatchFile[];
   threadsByFile: Map<string, Thread[]>;
   viewedSet: Set<string>;
   onJump: (path: string) => void;
+  onThreadJump: (path: string, threadId: number) => void;
   onCollapse: () => void;
 }) {
   const [filter, setFilter] = useState("");
+  const [expandedFiles, setExpandedFiles] = useState<Set<string>>(new Set());
   const matches = filter.trim().toLowerCase();
   const visible = matches ? files.filter((f) => f.path.toLowerCase().includes(matches)) : files;
   return (
@@ -666,33 +721,81 @@ function SideNav({
           const stats = statsForThreads(threads);
           const sev = topOpenSeverity(threads).severity;
           const viewed = viewedSet.has(f.path);
+          const expanded = expandedFiles.has(f.path);
           return (
             <li key={f.path}>
-              <button
-                className={`sidenav-row ${viewed ? "viewed" : ""}`}
-                onClick={() => onJump(f.path)}
-                title={f.path}
-              >
-                <span className={`sev-dot ${sev ? `sev-${sev}` : "none"}`} aria-hidden />
-                <span className="sidenav-path">{f.path}</span>
-                <span className="sidenav-counts">
-                  {stats.openCount > 0 && (
-                    <span className="pill open" title={`${stats.openCount} open`}>
-                      {stats.openCount}
-                    </span>
-                  )}
-                  {stats.resolvedCount > 0 && (
-                    <span className="pill ok" title={`${stats.resolvedCount} resolved`}>
-                      {stats.resolvedCount}
-                    </span>
-                  )}
-                  {viewed && (
-                    <span className="check" aria-hidden>
-                      ✓
-                    </span>
-                  )}
-                </span>
-              </button>
+              <div className="sidenav-file-line">
+                {threads.length > 0 ? (
+                  <button
+                    type="button"
+                    className="sidenav-thread-toggle"
+                    onClick={() =>
+                      setExpandedFiles((current) => {
+                        const next = new Set(current);
+                        if (next.has(f.path)) next.delete(f.path);
+                        else next.add(f.path);
+                        return next;
+                      })
+                    }
+                    aria-expanded={expanded}
+                    aria-label={`${expanded ? "Hide" : "Show"} comments for ${f.path}`}
+                  >
+                    {expanded ? "▾" : "▸"}
+                  </button>
+                ) : (
+                  <span className="sidenav-thread-toggle-spacer" aria-hidden />
+                )}
+                <button
+                  className={`sidenav-row ${viewed ? "viewed" : ""}`}
+                  onClick={() => onJump(f.path)}
+                  title={f.path}
+                >
+                  <span className={`sev-dot ${sev ? `sev-${sev}` : "none"}`} aria-hidden />
+                  <span className="sidenav-path">{f.path}</span>
+                  <span className="sidenav-counts">
+                    {stats.openCount > 0 && (
+                      <span className="pill open" title={`${stats.openCount} open`}>
+                        {stats.openCount}
+                      </span>
+                    )}
+                    {stats.resolvedCount > 0 && (
+                      <span className="pill ok" title={`${stats.resolvedCount} resolved`}>
+                        {stats.resolvedCount}
+                      </span>
+                    )}
+                    {viewed && (
+                      <span className="check" aria-hidden>
+                        ✓
+                      </span>
+                    )}
+                  </span>
+                </button>
+              </div>
+              {expanded && threads.length > 0 && (
+                <ul className="sidenav-thread-list">
+                  {threads.map((thread) => (
+                    <li key={thread.id}>
+                      <button
+                        type="button"
+                        className={`sidenav-thread-row ${thread.status}`}
+                        onClick={() => onThreadJump(f.path, thread.id)}
+                        title={thread.comments[0]?.body ?? "Review comment"}
+                      >
+                        <span
+                          className={`sev-dot ${thread.severity ? `sev-${thread.severity}` : "none"}`}
+                          aria-hidden
+                        />
+                        <span className="sidenav-thread-copy">
+                          <span className="sidenav-thread-location mono">
+                            {thread.line == null ? "File" : `L${thread.line}`}
+                          </span>
+                          <span className="sidenav-thread-preview">{threadPreview(thread)}</span>
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </li>
           );
         })}
@@ -700,6 +803,18 @@ function SideNav({
       </ul>
     </div>
   );
+}
+
+function threadPreview(thread: Thread): string {
+  const body = thread.comments[0]?.body ?? "Review comment";
+  const plain = body
+    .replace(/```[\s\S]*?```/g, " code ")
+    .replace(/[`*_#>()]/g, "")
+    .replaceAll("[", "")
+    .replaceAll("]", "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return truncate(plain || "Review comment", 68);
 }
 
 function ReviewProgress({
@@ -873,6 +988,7 @@ function FileBlock({
   file,
   repoId,
   registerRef,
+  registerThreadRef,
   annotations,
   fileThreads,
   allThreads,
@@ -883,10 +999,12 @@ function FileBlock({
   collapsed,
   onToggleCollapsed,
   onChange,
+  focusedThreadId,
 }: {
   file: PatchFile;
   repoId: number;
   registerRef: (path: string, el: HTMLElement | null) => void;
+  registerThreadRef: (threadId: number, el: HTMLElement | null) => void;
   annotations: LineThreads[];
   fileThreads: Thread[];
   allThreads: Thread[];
@@ -897,6 +1015,7 @@ function FileBlock({
   collapsed: boolean;
   onToggleCollapsed: () => void;
   onChange: () => void;
+  focusedThreadId: number | null;
 }) {
   const stats = statsForThreads(allThreads);
   const sev = topOpenSeverity(allThreads).severity;
@@ -962,6 +1081,8 @@ function FileBlock({
               repoId={repoId}
               onChange={onChange}
               showAnchor={t.line != null}
+              registerRef={registerThreadRef}
+              focused={focusedThreadId === t.id}
             />
           ))}
         </div>
@@ -986,7 +1107,14 @@ function FileBlock({
         renderAnnotation={(a) => (
           <div className="pierre-annotation">
             {a.metadata.map((t) => (
-              <ThreadCard key={t.id} thread={t} repoId={repoId} onChange={onChange} />
+              <ThreadCard
+                key={t.id}
+                thread={t}
+                repoId={repoId}
+                onChange={onChange}
+                registerRef={registerThreadRef}
+                focused={focusedThreadId === t.id}
+              />
             ))}
           </div>
         )}
@@ -1001,12 +1129,16 @@ function ThreadCard({
   onChange,
   compact = false,
   showAnchor = false,
+  registerRef,
+  focused = false,
 }: {
   thread: Thread;
   repoId: number;
   onChange: () => void;
   compact?: boolean;
   showAnchor?: boolean;
+  registerRef?: (threadId: number, el: HTMLElement | null) => void;
+  focused?: boolean;
 }) {
   const [reply, setReply] = useState("");
   const [streaming, setStreaming] = useState<null | "reply" | "revalidate">(null);
@@ -1040,7 +1172,11 @@ function ThreadCard({
 
   const sevClass = thread.severity ? `sev-${thread.severity}` : "";
   return (
-    <div className={`thread ${sevClass} ${thread.status} ${compact ? "compact" : ""}`}>
+    <div
+      className={`thread ${sevClass} ${thread.status} ${compact ? "compact" : ""} ${focused ? "jump-target" : ""}`}
+      ref={(el) => registerRef?.(thread.id, el)}
+      tabIndex={-1}
+    >
       <div className="thread-meta">
         {thread.severity && <span className={`pill sev ${sevClass}`}>{thread.severity}</span>}
         {showAnchor && thread.filePath && (

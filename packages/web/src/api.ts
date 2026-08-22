@@ -15,6 +15,9 @@ export interface PRListItem {
   baseRef: string;
   url: string;
   author: string | null;
+  assignees: string[];
+  requestedReviewers: string[];
+  createdAt: string;
   updatedAt: string;
   hasReview: boolean;
   reviewStatus: string | null;
@@ -150,7 +153,7 @@ export interface ProviderStatus {
 
 export interface AppStatus {
   providers: ProviderStatus[];
-  gh: { ok: boolean; message: string };
+  gh: { ok: boolean; message: string; login: string | null };
   settings: { provider: string; port: number; host: string };
 }
 

@@ -7,17 +7,37 @@
  */
 
 export type ViewMode = "unified" | "split";
+export type RepoViewMode = "list" | "grid";
+export type RepoSortMode = "manual" | "name" | "recent";
+export type HomeTab = "repos" | "prs";
+export type PrSortMode = "newest" | "oldest";
 
 export interface Prefs {
   viewMode: ViewMode;
   sidenavCollapsed: boolean;
   collapsedRepoIds: number[];
+  repoViewMode: RepoViewMode;
+  repoSortMode: RepoSortMode;
+  repoOrder: number[];
+  homeTab: HomeTab;
+  prSortMode: PrSortMode;
+  ownedByMeOnly: boolean;
+  reviewRequestedOnly: boolean;
+  showRepoOwner: boolean;
 }
 
 const DEFAULTS: Prefs = {
   viewMode: "unified",
   sidenavCollapsed: false,
   collapsedRepoIds: [],
+  repoViewMode: "list",
+  repoSortMode: "manual",
+  repoOrder: [],
+  homeTab: "repos",
+  prSortMode: "newest",
+  ownedByMeOnly: false,
+  reviewRequestedOnly: false,
+  showRepoOwner: false,
 };
 
 const STORAGE_KEY = "reviewer.prefs";

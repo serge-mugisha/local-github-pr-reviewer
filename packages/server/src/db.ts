@@ -40,6 +40,9 @@ export function migrateDatabase(db: Database.Database): void {
       state TEXT NOT NULL,
       url TEXT NOT NULL,
       author TEXT,
+      assignees TEXT NOT NULL DEFAULT '[]',
+      review_requests TEXT NOT NULL DEFAULT '[]',
+      created_at TEXT NOT NULL DEFAULT '',
       updated_at TEXT NOT NULL,
       reviewer_provider TEXT,
       UNIQUE(repo_id, number)
@@ -162,6 +165,16 @@ export function migrateDatabase(db: Database.Database): void {
   if (!prColumns.some((column) => column.name === "reviewer_provider")) {
     db.exec("ALTER TABLE prs ADD COLUMN reviewer_provider TEXT");
   }
+  if (!prColumns.some((column) => column.name === "assignees")) {
+    db.exec("ALTER TABLE prs ADD COLUMN assignees TEXT NOT NULL DEFAULT '[]'");
+  }
+  if (!prColumns.some((column) => column.name === "review_requests")) {
+    db.exec("ALTER TABLE prs ADD COLUMN review_requests TEXT NOT NULL DEFAULT '[]'");
+  }
+  if (!prColumns.some((column) => column.name === "created_at")) {
+    db.exec("ALTER TABLE prs ADD COLUMN created_at TEXT NOT NULL DEFAULT ''");
+    db.exec("UPDATE prs SET created_at = updated_at WHERE created_at = ''");
+  }
 }
 
 // --- Row types ---
@@ -186,6 +199,9 @@ export interface PrRow {
   state: string;
   url: string;
   author: string | null;
+  assignees: string;
+  review_requests: string;
+  created_at: string;
   updated_at: string;
   reviewer_provider: string | null;
 }

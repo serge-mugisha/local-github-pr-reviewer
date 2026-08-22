@@ -156,6 +156,11 @@ The tool includes a Model Context Protocol (MCP) server that exposes all PR revi
 
 Add the MCP server to your AI agent's configuration. Ensure that the project is built first (`npm run build`).
 
+For agent-driven review queues, call `list_my_prs` with `relationship` set to `authored`,
+`review_requested`, or `authored_or_review_requested`. Results include repository context and the
+local `prId` needed by `get_pr_details` and `trigger_review`; creation/activity sorting, optional
+cache-only reads, and an optional result limit are supported.
+
 **For Claude Desktop** (`claude_desktop_config.json`):
 
 ```json

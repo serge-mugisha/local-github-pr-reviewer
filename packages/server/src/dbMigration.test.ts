@@ -10,8 +10,8 @@ afterEach(() => {
   db = null;
 });
 
-describe("reviewer provider migration", () => {
-  it("adds override columns and preserves a PR override through the real refresh upsert", () => {
+describe("PR schema migration", () => {
+  it("adds current columns and preserves a PR override through the real refresh upsert", () => {
     db = new Database(":memory:");
     db.exec(`
       CREATE TABLE repos (
@@ -45,6 +45,9 @@ describe("reviewer provider migration", () => {
     const prColumns = db.pragma("table_info(prs)") as { name: string }[];
     expect(repoColumns.map((column) => column.name)).toContain("reviewer_provider");
     expect(prColumns.map((column) => column.name)).toContain("reviewer_provider");
+    expect(prColumns.map((column) => column.name)).toContain("assignees");
+    expect(prColumns.map((column) => column.name)).toContain("review_requests");
+    expect(prColumns.map((column) => column.name)).toContain("created_at");
 
     const repoId = Number(
       db
@@ -69,12 +72,29 @@ describe("reviewer provider migration", () => {
       "OPEN",
       "url",
       "author",
+      "[]",
+      '["reviewer"]',
+      "created",
       "new",
     );
 
     const refreshed = db
-      .prepare("SELECT title, reviewer_provider FROM prs WHERE repo_id = ? AND number = 16")
-      .get(repoId) as { title: string; reviewer_provider: string | null };
-    expect(refreshed).toEqual({ title: "Refreshed", reviewer_provider: "codex" });
+      .prepare(
+        "SELECT title, reviewer_provider, assignees, review_requests, created_at FROM prs WHERE repo_id = ? AND number = 16",
+      )
+      .get(repoId) as {
+      title: string;
+      reviewer_provider: string | null;
+      assignees: string;
+      review_requests: string;
+      created_at: string;
+    };
+    expect(refreshed).toEqual({
+      title: "Refreshed",
+      reviewer_provider: "codex",
+      assignees: "[]",
+      review_requests: '["reviewer"]',
+      created_at: "created",
+    });
   });
 });

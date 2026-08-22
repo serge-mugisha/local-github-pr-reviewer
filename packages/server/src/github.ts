@@ -84,8 +84,11 @@ export interface GhPRSummary {
   baseRefName: string;
   url: string;
   isDraft: boolean;
+  createdAt: string;
   updatedAt: string;
   author: { login: string } | null;
+  assignees: { login: string }[];
+  reviewRequests: { login?: string }[];
 }
 
 export interface GhPRDetail extends GhPRSummary {
@@ -97,12 +100,13 @@ export interface GhPRDetail extends GhPRSummary {
   changedFiles: number;
 }
 
-export async function checkAuth(): Promise<{ ok: boolean; message: string }> {
+export async function checkAuth(): Promise<{ ok: boolean; message: string; login: string | null }> {
   try {
     await ghText(["auth", "status"]);
-    return { ok: true, message: "authenticated" };
+    const viewer = await ghJson<{ login: string }>(["api", "user"]);
+    return { ok: true, message: "authenticated", login: viewer.login };
   } catch (e) {
-    return { ok: false, message: (e as Error).message };
+    return { ok: false, message: (e as Error).message, login: null };
   }
 }
 
@@ -117,7 +121,7 @@ export async function listOpenPRs(owner: string, name: string): Promise<GhPRSumm
     "--limit",
     "200",
     "--json",
-    "number,title,state,headRefName,baseRefName,url,isDraft,updatedAt,author",
+    "number,title,state,headRefName,baseRefName,url,isDraft,createdAt,updatedAt,author,assignees,reviewRequests",
   ]);
 }
 
@@ -132,7 +136,7 @@ export async function listClosedPRs(owner: string, name: string): Promise<GhPRSu
     "--limit",
     "200",
     "--json",
-    "number,title,state,headRefName,baseRefName,url,isDraft,updatedAt,author",
+    "number,title,state,headRefName,baseRefName,url,isDraft,createdAt,updatedAt,author,assignees,reviewRequests",
   ]);
   const closed = await ghJson<GhPRSummary[]>([
     "pr",
@@ -144,7 +148,7 @@ export async function listClosedPRs(owner: string, name: string): Promise<GhPRSu
     "--limit",
     "200",
     "--json",
-    "number,title,state,headRefName,baseRefName,url,isDraft,updatedAt,author",
+    "number,title,state,headRefName,baseRefName,url,isDraft,createdAt,updatedAt,author,assignees,reviewRequests",
   ]);
   return [...merged, ...closed];
 }
@@ -157,7 +161,7 @@ export async function getPR(owner: string, name: string, number: number): Promis
     "--repo",
     `${owner}/${name}`,
     "--json",
-    "number,title,state,headRefName,baseRefName,url,isDraft,updatedAt,author,body,headRefOid,baseRefOid,additions,deletions,changedFiles",
+    "number,title,state,headRefName,baseRefName,url,isDraft,createdAt,updatedAt,author,assignees,reviewRequests,body,headRefOid,baseRefOid,additions,deletions,changedFiles",
   ]);
 }
 

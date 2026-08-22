@@ -11,6 +11,9 @@ export interface PrListItem {
   baseRef: string;
   url: string;
   author: string | null;
+  assignees: string[];
+  requestedReviewers: string[];
+  createdAt: string;
   updatedAt: string;
   hasReview: boolean;
   reviewStatus: string | null;
@@ -20,7 +23,8 @@ export interface PrListItem {
 export const LIST_PRS_SQL = `
   SELECT
     p.id, p.number, p.title, p.state, p.head_ref AS headRef, p.base_ref AS baseRef,
-    p.url, p.author, p.updated_at AS updatedAt,
+    p.url, p.author, p.assignees, p.review_requests AS requestedReviewers,
+    p.created_at AS createdAt, p.updated_at AS updatedAt,
     EXISTS(
       SELECT 1 FROM reviews r WHERE r.pr_id = p.id AND r.status = 'done'
     ) AS hasReview,
@@ -32,8 +36,8 @@ export const LIST_PRS_SQL = `
 `;
 
 export const OPEN_PR_UPSERT_SQL = `
-  INSERT INTO prs (repo_id, number, title, body, head_sha, base_sha, head_ref, base_ref, state, url, author, updated_at)
-  VALUES (?, ?, ?, '', '', '', ?, ?, ?, ?, ?, ?)
+  INSERT INTO prs (repo_id, number, title, body, head_sha, base_sha, head_ref, base_ref, state, url, author, assignees, review_requests, created_at, updated_at)
+  VALUES (?, ?, ?, '', '', '', ?, ?, ?, ?, ?, ?, ?, ?, ?)
   ON CONFLICT(repo_id, number) DO UPDATE SET
     title = excluded.title,
     head_ref = excluded.head_ref,
@@ -41,6 +45,9 @@ export const OPEN_PR_UPSERT_SQL = `
     state = excluded.state,
     url = excluded.url,
     author = excluded.author,
+    assignees = excluded.assignees,
+    review_requests = excluded.review_requests,
+    created_at = excluded.created_at,
     updated_at = excluded.updated_at
 `;
 
@@ -60,6 +67,13 @@ export async function refreshOpenPRs(repo: RepoRow): Promise<PrListItem[]> {
         p.state,
         p.url,
         p.author?.login ?? null,
+        JSON.stringify((p.assignees ?? []).map((assignee) => assignee.login)),
+        JSON.stringify(
+          (p.reviewRequests ?? []).flatMap((reviewer) =>
+            reviewer.login === undefined ? [] : [reviewer.login],
+          ),
+        ),
+        p.createdAt ?? p.updatedAt,
         p.updatedAt,
       );
     }
@@ -78,10 +92,20 @@ export async function refreshOpenPRs(repo: RepoRow): Promise<PrListItem[]> {
 
 export function listPRsForRepo(repoId: number): PrListItem[] {
   const db = getDb();
-  const rows = db.prepare(LIST_PRS_SQL).all(repoId) as (Omit<PrListItem, "hasReview"> & {
+  const rows = db.prepare(LIST_PRS_SQL).all(repoId) as (Omit<
+    PrListItem,
+    "hasReview" | "assignees" | "requestedReviewers"
+  > & {
     hasReview: 0 | 1;
+    assignees: string;
+    requestedReviewers: string;
   })[];
-  return rows.map((r) => ({ ...r, hasReview: !!r.hasReview }));
+  return rows.map((r) => ({
+    ...r,
+    assignees: JSON.parse(r.assignees) as string[],
+    requestedReviewers: JSON.parse(r.requestedReviewers) as string[],
+    hasReview: !!r.hasReview,
+  }));
 }
 
 export function getPRById(prId: number): PrRow | undefined {
@@ -93,8 +117,8 @@ export async function hydratePR(repo: RepoRow, prNumber: number): Promise<PrRow>
   const db = getDb();
   db.prepare(
     `
-    INSERT INTO prs (repo_id, number, title, body, head_sha, base_sha, head_ref, base_ref, state, url, author, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO prs (repo_id, number, title, body, head_sha, base_sha, head_ref, base_ref, state, url, author, assignees, review_requests, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(repo_id, number) DO UPDATE SET
       title = excluded.title,
       body = excluded.body,
@@ -105,6 +129,9 @@ export async function hydratePR(repo: RepoRow, prNumber: number): Promise<PrRow>
       state = excluded.state,
       url = excluded.url,
       author = excluded.author,
+      assignees = excluded.assignees,
+      review_requests = excluded.review_requests,
+      created_at = excluded.created_at,
       updated_at = excluded.updated_at
   `,
   ).run(
@@ -119,6 +146,13 @@ export async function hydratePR(repo: RepoRow, prNumber: number): Promise<PrRow>
     detail.state,
     detail.url,
     detail.author?.login ?? null,
+    JSON.stringify(detail.assignees.map((assignee) => assignee.login)),
+    JSON.stringify(
+      detail.reviewRequests.flatMap((reviewer) =>
+        reviewer.login === undefined ? [] : [reviewer.login],
+      ),
+    ),
+    detail.createdAt,
     detail.updatedAt,
   );
   return db

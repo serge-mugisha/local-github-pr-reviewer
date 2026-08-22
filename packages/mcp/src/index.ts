@@ -9,6 +9,7 @@ import {
 import { z } from "zod";
 import * as api from "@reviewer/server/api";
 import { resolveJobStatus, type Job } from "./jobStatus.js";
+import { collectViewerPrs } from "./prDiscovery.js";
 
 let nextJobId = 1;
 const jobs = new Map<number, Job>();
@@ -174,6 +175,39 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             repoId: { type: "number" },
           },
           required: ["repoId"],
+        },
+      },
+      {
+        name: "list_my_prs",
+        description:
+          "Lists open PRs across all registered repositories that were authored by the authenticated GitHub user or have a pending review request for them. Returns repository context and the local prId needed by get_pr_details and trigger_review.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            relationship: {
+              type: "string",
+              enum: ["authored", "review_requested", "authored_or_review_requested"],
+              description:
+                "Which PRs to return. Defaults to authored_or_review_requested for the complete personal review queue.",
+            },
+            sort: {
+              type: "string",
+              enum: ["oldest", "newest", "recently_updated"],
+              description: "Sort by PR creation time or recent activity. Defaults to oldest.",
+            },
+            refresh: {
+              type: "boolean",
+              description:
+                "Refresh every registered repository from GitHub before filtering. Defaults to true; false uses the local cache.",
+            },
+            limit: {
+              type: "number",
+              minimum: 1,
+              maximum: 500,
+              description:
+                "Optional maximum results. The response still reports totalMatching before the limit.",
+            },
+          },
         },
       },
       {
@@ -465,6 +499,66 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         await api.refreshOpenPRs(requireRepo(repoId)); // auto-refresh to be helpful
         return {
           content: [{ type: "text", text: JSON.stringify(api.listPRsForRepo(repoId), null, 2) }],
+        };
+      }
+      case "list_my_prs": {
+        const args = z
+          .object({
+            relationship: z
+              .enum(["authored", "review_requested", "authored_or_review_requested"])
+              .default("authored_or_review_requested"),
+            sort: z.enum(["oldest", "newest", "recently_updated"]).default("oldest"),
+            refresh: z.boolean().default(true),
+            limit: z.number().int().min(1).max(500).optional(),
+          })
+          .parse(request.params.arguments ?? {});
+        const auth = await api.checkAuth();
+        if (!auth.ok || !auth.login) {
+          throw new Error(`GitHub authentication is required: ${auth.message}`);
+        }
+
+        const repos = api.listRepos();
+        const refreshErrors: Array<{ repoId: number; repo: string; error: string }> = [];
+        if (args.refresh) {
+          const results = await Promise.allSettled(repos.map((repo) => api.refreshOpenPRs(repo)));
+          results.forEach((result, index) => {
+            if (result.status === "rejected") {
+              const repo = repos[index]!;
+              refreshErrors.push({
+                repoId: repo.id,
+                repo: `${repo.owner}/${repo.name}`,
+                error: String(result.reason),
+              });
+            }
+          });
+        }
+        api.reconcileInterruptedReviews();
+        const result = collectViewerPrs({
+          repos,
+          getPrs: api.listPRsForRepo,
+          viewerLogin: auth.login,
+          relationship: args.relationship,
+          sort: args.sort,
+          limit: args.limit,
+        });
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(
+                {
+                  viewerLogin: auth.login,
+                  relationship: args.relationship,
+                  sort: args.sort,
+                  refreshed: args.refresh,
+                  refreshErrors,
+                  ...result,
+                },
+                null,
+                2,
+              ),
+            },
+          ],
         };
       }
       case "get_pr_details": {
