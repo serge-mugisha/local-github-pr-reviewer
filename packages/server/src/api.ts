@@ -4,6 +4,7 @@ export * from "./sessions.js";
 export * from "./settings.js";
 export * from "./reviewerProvider.js";
 export * from "./providers/index.js";
+export * from "./providers/spawn.js";
 export * from "./skills.js";
 export * from "./reviewConfig.js";
 export * from "./reviewCatalog.js";

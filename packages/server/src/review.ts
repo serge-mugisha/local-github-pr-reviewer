@@ -28,6 +28,7 @@ function now(): string {
 const REVIEW_HEARTBEAT_MS = 5_000;
 const REVIEW_STALE_AFTER_MS = 30_000;
 const REVIEW_HARD_STALE_AFTER_MS = 20 * 60 * 1_000;
+const REVIEW_EXECUTION_TIMEOUT_MS = 20 * 60 * 1_000;
 
 function isProcessAlive(pid: number): boolean {
   try {
@@ -107,7 +108,7 @@ export interface WaitForReviewOptions {
   onProgress?: (review: ReviewRow) => void;
 }
 
-const REVIEW_WAIT_TIMEOUT_MS = 16 * 60 * 1_000;
+const REVIEW_WAIT_TIMEOUT_MS = 21 * 60 * 1_000;
 const REVIEW_POLL_INTERVAL_MS = 250;
 
 function waitForDelay(ms: number, signal?: AbortSignal): Promise<void> {
@@ -250,6 +251,19 @@ async function completeReview(
         added_threads = ?, stale_marked = ?
     WHERE id = ? AND worker_token = ? AND status = 'running'
   `);
+  const executionTimer = setTimeout(() => {
+    db.prepare(
+      `UPDATE reviews
+       SET status = 'error', finished_at = ?, error = ?
+       WHERE id = ? AND worker_token = ? AND status = 'running'`,
+    ).run(
+      now(),
+      `Review exceeded the ${Math.round(REVIEW_EXECUTION_TIMEOUT_MS / 60_000)}-minute total lifecycle limit.`,
+      reviewId,
+      workerToken,
+    );
+  }, REVIEW_EXECUTION_TIMEOUT_MS);
+  executionTimer.unref?.();
   const assertLease = () => {
     const ownership = db
       .prepare("SELECT 1 FROM reviews WHERE id = ? AND worker_token = ? AND status = 'running'")
@@ -384,6 +398,7 @@ async function completeReview(
     throw e;
   } finally {
     clearInterval(heartbeatTimer);
+    clearTimeout(executionTimer);
   }
 }
 

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { formatCliFailure, spawnCli, type SpawnResult } from "./spawn.js";
+import {
+  formatCliFailure,
+  spawnCli,
+  terminateActiveCliChildren,
+  type SpawnResult,
+} from "./spawn.js";
 
 function result(partial: Partial<SpawnResult>): SpawnResult {
   return {
@@ -64,5 +69,18 @@ describe("spawnCli timeout", () => {
       }),
     ).rejects.toThrow(/timed out after 50ms/);
     expect(Date.now() - startedAt).toBeLessThan(1_000);
+  });
+
+  it("terminates active provider process groups during server shutdown", async () => {
+    const running = spawnCli({
+      cmd: process.execPath,
+      args: ["-e", "setInterval(() => {}, 1000)"],
+      cwd: process.cwd(),
+    });
+
+    terminateActiveCliChildren("SIGTERM");
+
+    const result = await running;
+    expect(result.exitCode).not.toBe(0);
   });
 });

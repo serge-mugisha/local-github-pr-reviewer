@@ -329,8 +329,9 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             timeoutMs: {
               type: "number",
               minimum: 1000,
-              maximum: 960000,
-              description: "Maximum time for this wait call. Defaults to 16 minutes.",
+              maximum: 1260000,
+              description:
+                "Maximum time for this wait call. Defaults to 21 minutes, one minute beyond the enforced total review lifecycle.",
             },
           },
           required: ["reviewId"],
@@ -763,8 +764,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
               .number()
               .int()
               .min(1_000)
-              .max(16 * 60 * 1_000)
-              .default(16 * 60 * 1_000),
+              .max(21 * 60 * 1_000)
+              .default(21 * 60 * 1_000),
           })
           .parse(request.params.arguments);
         let lastProgressAt = 0;
@@ -899,6 +900,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
 });
 
 async function main() {
+  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT"] as const) {
+    const shutdown = () => {
+      api.terminateActiveCliChildren("SIGTERM");
+      process.removeListener(signal, shutdown);
+      process.kill(process.pid, signal);
+    };
+    process.once(signal, shutdown);
+  }
   const pruneStale = () =>
     api.pruneStaleWorktrees(api.listRepos()).catch((error) => {
       console.error(`Reviewer MCP worktree pruning failed: ${String(error)}`);

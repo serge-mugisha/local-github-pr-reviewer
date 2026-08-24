@@ -240,4 +240,32 @@ describe("startReview", () => {
       status: "error",
     });
   });
+
+  it("publishes a terminal error at the total lifecycle deadline", async () => {
+    vi.useFakeTimers();
+    let releaseProvider!: (value: Awaited<ReturnType<typeof mocks.review>>) => void;
+    try {
+      mocks.review.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            releaseProvider = resolve;
+          }),
+      );
+      const started = startReview({ repo, pr: mocks.pr, providerId: "test" });
+      await vi.waitFor(() => expect(mocks.review).toHaveBeenCalledOnce());
+
+      await vi.advanceTimersByTimeAsync(20 * 60 * 1_000);
+      expect(
+        mocks.db.prepare("SELECT status, error FROM reviews WHERE id = ?").get(started.reviewId),
+      ).toEqual({
+        status: "error",
+        error: "Review exceeded the 20-minute total lifecycle limit.",
+      });
+
+      releaseProvider({ summary: "late", comments: [], rawOutput: "", sessionIds: [] });
+      await expect(started.completion).rejects.toThrow("lost its worker lease");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

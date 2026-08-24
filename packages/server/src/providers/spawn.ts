@@ -48,9 +48,10 @@ function killProcessTree(child: ReturnType<typeof spawn>, signal: NodeJS.Signals
 }
 
 const activeCliChildren = new Set<ReturnType<typeof spawn>>();
-process.once("exit", () => {
-  for (const child of activeCliChildren) killProcessTree(child, "SIGTERM");
-});
+export function terminateActiveCliChildren(signal: NodeJS.Signals = "SIGTERM"): void {
+  for (const child of activeCliChildren) killProcessTree(child, signal);
+}
+process.once("exit", () => terminateActiveCliChildren());
 
 export function spawnCli(opts: SpawnOptions): Promise<SpawnResult> {
   return new Promise((resolveP, rejectP) => {
