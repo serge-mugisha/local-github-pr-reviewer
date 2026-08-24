@@ -20,6 +20,7 @@ import { hydratePR } from "./prs.js";
 import { recordSessions } from "./sessions.js";
 import { preparePrHeadWorktree, type PrWorktree } from "./prWorktree.js";
 import { randomUUID } from "node:crypto";
+import type Database from "better-sqlite3";
 
 function now(): string {
   return new Date().toISOString();
@@ -39,11 +40,10 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
-export function reconcileInterruptedReviews(): number {
+export function reconcileInterruptedReviews(db: Database.Database = getDb()): number {
   const finishedAt = now();
   const staleBefore = new Date(Date.now() - REVIEW_STALE_AFTER_MS).toISOString();
   const hardStaleBefore = new Date(Date.now() - REVIEW_HARD_STALE_AFTER_MS).toISOString();
-  const db = getDb();
   const candidates = db
     .prepare(
       `SELECT id, worker_pid, heartbeat_at
@@ -99,6 +99,55 @@ export interface StartedReview {
   reviewId: number;
   created: boolean;
   completion: Promise<RunReviewResult>;
+}
+
+export interface ReviewClaimArgs {
+  prId: number;
+  headSha: string;
+  providerId: string;
+  startedAt: string;
+  workerToken: string;
+  workerPid: number;
+  beforeClaim?: () => void;
+  beforeCreate?: () => void;
+}
+
+/** The small, synchronous cross-process critical section for review ownership. */
+export function claimReview(
+  db: Database.Database,
+  args: ReviewClaimArgs,
+): { reviewId: number; created: boolean; workerToken?: string } {
+  return db
+    .transaction((): { reviewId: number; created: boolean; workerToken?: string } => {
+      args.beforeClaim?.();
+      const active = db
+        .prepare(
+          "SELECT id FROM reviews WHERE pr_id = ? AND status = 'running' ORDER BY id DESC LIMIT 1",
+        )
+        .get(args.prId) as { id: number } | undefined;
+      if (active) return { reviewId: active.id, created: false };
+
+      args.beforeCreate?.();
+      const reviewId = Number(
+        db
+          .prepare(
+            `INSERT INTO reviews
+               (pr_id, head_sha, provider, status, started_at, heartbeat_at, worker_token, worker_pid)
+             VALUES (?, ?, ?, 'running', ?, ?, ?, ?)`,
+          )
+          .run(
+            args.prId,
+            args.headSha,
+            args.providerId,
+            args.startedAt,
+            args.startedAt,
+            args.workerToken,
+            args.workerPid,
+          ).lastInsertRowid,
+      );
+      return { reviewId, created: true, workerToken: args.workerToken };
+    })
+    .immediate();
 }
 
 export interface WaitForReviewOptions {
@@ -185,32 +234,16 @@ export function startReview(args: RunReviewArgs): StartedReview {
   // A SQLite write transaction is the cross-process lock. Every UI and MCP
   // server shares this database, so only the winner inserts and runs a
   // provider; all concurrent callers join the same durable review.
-  const claim = db
-    .transaction((): { reviewId: number; created: boolean; workerToken?: string } => {
-      reconcileInterruptedReviews();
-      const active = db
-        .prepare(
-          "SELECT id FROM reviews WHERE pr_id = ? AND status = 'running' ORDER BY id DESC LIMIT 1",
-        )
-        .get(pr.id) as { id: number } | undefined;
-      if (active) return { reviewId: active.id, created: false };
-
-      beforeCreate?.();
-      const startedAt = now();
-      const workerToken = randomUUID();
-      const reviewId = Number(
-        db
-          .prepare(
-            `INSERT INTO reviews
-               (pr_id, head_sha, provider, status, started_at, heartbeat_at, worker_token, worker_pid)
-             VALUES (?, ?, ?, 'running', ?, ?, ?, ?)`,
-          )
-          .run(pr.id, pr.head_sha, providerId, startedAt, startedAt, workerToken, process.pid)
-          .lastInsertRowid,
-      );
-      return { reviewId, created: true, workerToken };
-    })
-    .immediate();
+  const claim = claimReview(db, {
+    prId: pr.id,
+    headSha: pr.head_sha,
+    providerId,
+    startedAt: now(),
+    workerToken: randomUUID(),
+    workerPid: process.pid,
+    beforeClaim: () => reconcileInterruptedReviews(db),
+    beforeCreate,
+  });
 
   if (!claim.created) {
     const waitController = new AbortController();

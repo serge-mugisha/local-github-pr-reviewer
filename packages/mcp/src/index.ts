@@ -10,6 +10,7 @@ import { z } from "zod";
 import * as api from "@reviewer/server/api";
 import { resolveJobStatus, type Job } from "./jobStatus.js";
 import { collectViewerPrs } from "./prDiscovery.js";
+import { handleAwaitReview } from "./awaitReview.js";
 
 // Ephemeral reply/revalidate jobs use negative IDs; positive review job IDs
 // are their durable SQLite review IDs and survive MCP process restarts.
@@ -768,37 +769,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
               .default(21 * 60 * 1_000),
           })
           .parse(request.params.arguments);
-        let lastProgressAt = 0;
-        await api.waitForReview(reviewId, {
-          signal: extra.signal,
-          timeoutMs,
-          onProgress: (review) => {
-            const progressToken = request.params._meta?.progressToken;
-            const timestamp = Date.now();
-            if (progressToken === undefined || timestamp - lastProgressAt < 10_000) return;
-            lastProgressAt = timestamp;
-            const elapsedSeconds = Math.max(
-              0,
-              Math.round((timestamp - Date.parse(review.started_at)) / 1_000),
-            );
-            void extra
-              .sendNotification({
-                method: "notifications/progress",
-                params: {
-                  progressToken,
-                  progress: elapsedSeconds,
-                  message: `Review ${review.id} is healthy and still running (${elapsedSeconds}s elapsed).`,
-                },
-              })
-              .catch(() => {
-                // The review continues durably if this client disconnects.
-              });
-          },
-        });
-        const resolved = resolveJobStatus(
-          { reviewId },
+        const resolved = await handleAwaitReview(
+          { reviewId, timeoutMs },
           {
-            getJob: (id) => jobs.get(id),
+            signal: extra.signal,
+            progressToken: request.params._meta?.progressToken,
+            sendProgress: (params) =>
+              extra.sendNotification({ method: "notifications/progress", params }),
+          },
+          {
+            waitForReview: api.waitForReview,
             getReview: api.getReview,
             getThreads: api.listThreadsForPR,
             reconcileInterruptedReviews: api.reconcileInterruptedReviews,
