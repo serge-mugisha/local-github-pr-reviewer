@@ -250,16 +250,7 @@ export function Home() {
       ),
     }));
     try {
-      let reviewError: string | null = null;
-      await postSse(`/api/prs/${prId}/review`, {}, (event) => {
-        if (event.event !== "error") return;
-        const data = event.data;
-        reviewError =
-          data && typeof data === "object" && "message" in data
-            ? String((data as { message?: unknown }).message ?? "Review failed")
-            : "Review failed";
-      });
-      if (reviewError) throw new Error(reviewError);
+      await postSse(`/api/prs/${prId}/review`, {}, () => {});
     } catch (error) {
       console.error(`review failed for PR ${prId}:`, error);
     } finally {

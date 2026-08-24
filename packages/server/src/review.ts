@@ -880,7 +880,8 @@ export function startReply(args: ReplyArgs): StartedThreadAction<{ aiCommentId: 
     beforeCreate: () => {
       // Persist the user's input in the same transaction that claims the
       // action. Provider failure must never make a submitted message vanish,
-      // while joined callers must not duplicate it.
+      // while joined callers must not duplicate it. This pre-hydration SHA is
+      // intentionally best-effort; the AI response records the refreshed SHA.
       db.prepare(
         `INSERT INTO comments (thread_id, author, body, head_sha, kind, created_at)
          VALUES (?, 'user', ?, ?, 'normal', ?)`,

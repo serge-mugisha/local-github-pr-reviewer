@@ -69,11 +69,11 @@ export async function pruneStaleWorktrees(
 
   for (const repo of repos) {
     const repoWorktrees = resolve(dataDir(), `worktrees/repo-${repo.id}`);
-    let entries;
+    let entries: Array<{ isDirectory(): boolean; name: string }>;
     try {
       entries = await readdir(repoWorktrees, { withFileTypes: true });
     } catch {
-      continue;
+      entries = [];
     }
 
     for (const entry of entries) {
@@ -105,6 +105,22 @@ export async function pruneStaleWorktrees(
     } catch (error) {
       console.error(`Reviewer worktree metadata pruning failed: ${String(error)}`);
     }
+
+    try {
+      const refs = await runGit(
+        ["for-each-ref", "--format=%(refname)", "refs/reviewer/actions"],
+        repo.local_path,
+        undefined,
+        WORKTREE_CLEANUP_TIMEOUT_MS,
+      );
+      for (const ref of refs.split("\n").filter(Boolean)) {
+        const match = /^refs\/reviewer\/actions\/\d+-\d+-(\d+)-[0-9a-f]{8}$/.exec(ref);
+        if (!match || Number(match[1]) >= cutoff) continue;
+        await runGit(["update-ref", "-d", ref], repo.local_path, undefined, 5_000);
+      }
+    } catch (error) {
+      console.error(`Reviewer action-ref cleanup failed: ${String(error)}`);
+    }
   }
 
   return removed;
@@ -124,6 +140,7 @@ export async function preparePrHeadWorktree(args: {
   });
 
   const token = randomBytes(4).toString("hex");
+  const createdAt = Date.now();
   const worktreePath = resolve(
     dataDir(),
     `worktrees/repo-${repo.id}/pr-${pr.number}-${pr.head_sha}-${token}`,
@@ -133,7 +150,7 @@ export async function preparePrHeadWorktree(args: {
   // same PR must never race while force-updating one shared ref.
   // Keep this namespace disjoint from the historical
   // refs/reviewer/pr/<repo>/<number> leaf refs already present in upgrades.
-  const ref = `refs/reviewer/actions/${repo.id}-${pr.number}-${token}`;
+  const ref = `refs/reviewer/actions/${repo.id}-${pr.number}-${createdAt}-${token}`;
   try {
     await runGit(
       ["fetch", "--no-tags", "origin", `+refs/pull/${pr.number}/head:${ref}`],
@@ -165,7 +182,7 @@ export async function preparePrHeadWorktree(args: {
     try {
       await runGit(["update-ref", "-d", ref], repo.local_path, undefined, 5_000);
     } catch {
-      // A later git prune can remove abandoned Reviewer refs.
+      // The timestamped stale-ref sweep handles interrupted preparation.
     }
     throw error;
   }
@@ -180,11 +197,15 @@ export async function preparePrHeadWorktree(args: {
           undefined,
           WORKTREE_CLEANUP_TIMEOUT_MS,
         );
-        await runGit(["update-ref", "-d", ref], repo.local_path, undefined, 5_000);
       } catch (e) {
         // Cleanup runs after the review completion signal, so its original SSE
         // progress stream may already be closed. Report it to the process log.
         console.error(`Reviewer worktree cleanup failed: ${(e as Error).message}`);
+      }
+      try {
+        await runGit(["update-ref", "-d", ref], repo.local_path, undefined, 5_000);
+      } catch (e) {
+        console.error(`Reviewer action-ref cleanup failed: ${(e as Error).message}`);
       }
     },
   };

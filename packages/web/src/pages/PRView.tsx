@@ -1154,6 +1154,7 @@ function ThreadCard({
       onChange();
     } catch (error) {
       setActionError(error instanceof Error ? error.message : String(error));
+      setReply("");
       onChange();
     } finally {
       setStreaming(null);
