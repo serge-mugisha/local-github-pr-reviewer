@@ -122,6 +122,7 @@ export function spawnCli(opts: SpawnOptions): Promise<SpawnResult> {
       // SIGTERM, so only settle after process-group SIGKILL has run.
       forceKillTimer = setTimeout(() => {
         killProcessTree(child, "SIGKILL");
+        activeCliChildren.delete(child);
         fail(cancellationError!);
       }, 2_000);
       forceKillTimer.unref?.();
@@ -132,7 +133,10 @@ export function spawnCli(opts: SpawnOptions): Promise<SpawnResult> {
       timer = setTimeout(() => {
         killProcessTree(child, "SIGTERM");
         fail(new CliTimeoutError(`${opts.cmd} timed out after ${opts.timeoutMs}ms`));
-        forceKillTimer = setTimeout(() => killProcessTree(child, "SIGKILL"), 2_000);
+        forceKillTimer = setTimeout(() => {
+          killProcessTree(child, "SIGKILL");
+          activeCliChildren.delete(child);
+        }, 2_000);
         forceKillTimer.unref?.();
       }, opts.timeoutMs);
       timer.unref?.();
@@ -151,7 +155,10 @@ export function spawnCli(opts: SpawnOptions): Promise<SpawnResult> {
       opts.onProgress?.({ type: "stderr", data: s });
     });
     child.on("close", (code) => {
-      activeCliChildren.delete(child);
+      // A direct parent can close while descendants in its process group are
+      // still alive. Retain the group leader through a pending escalation so
+      // process shutdown can still find and kill that group.
+      if (!forceKillTimer) activeCliChildren.delete(child);
       opts.signal?.removeEventListener("abort", onAbort);
       finish({ stdout, stderr, combinedOutput, exitCode: code ?? -1 });
     });

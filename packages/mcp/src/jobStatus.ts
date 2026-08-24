@@ -69,12 +69,10 @@ export function reconcileReviewJob(job: Job, review: ReviewRow): Job {
 
 export function resolveJobStatus(query: JobStatusQuery, deps: JobStatusDeps): Job {
   const existingJob = query.jobId === undefined ? undefined : deps.getJob(query.jobId);
-  // New review jobs use the persisted review id as their stable job id. The
-  // final fallback keeps jobId-only callers working across MCP restarts.
-  const reviewId =
-    query.reviewId ??
-    existingJob?.reviewId ??
-    (query.jobId !== undefined && existingJob === undefined ? query.jobId : undefined);
+  // A pre-0.4.1 positive job id was an unrelated in-memory counter, so an
+  // uncached jobId must never be guessed to be a persisted review id. The
+  // explicit reviewId is the restart-safe handle returned by trigger_review.
+  const reviewId = query.reviewId ?? existingJob?.reviewId;
 
   if (reviewId !== undefined) {
     if (existingJob && existingJob.type !== "review") {

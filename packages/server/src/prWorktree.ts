@@ -1,10 +1,10 @@
-import { spawn } from "node:child_process";
 import { resolve } from "node:path";
 import { readdir, rm, stat } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { dataDir } from "./config.js";
 import type { RepoRow, PrRow } from "./db.js";
 import type { ProviderProgress } from "./providers/types.js";
+import { spawnCli } from "./providers/spawn.js";
 
 export interface PrWorktree {
   cwd: string;
@@ -14,85 +14,25 @@ export interface PrWorktree {
 const WORKTREE_CLEANUP_TIMEOUT_MS = 30_000;
 const STALE_WORKTREE_AFTER_MS = 30 * 60 * 1_000;
 
-function runGit(
+async function runGit(
   args: string[],
   cwd: string,
   onProgress?: ProviderProgress,
   timeoutMs?: number,
   signal?: AbortSignal,
 ): Promise<string> {
-  return new Promise((resolveP, rejectP) => {
-    if (signal?.aborted) {
-      rejectP(
-        signal.reason instanceof Error
-          ? signal.reason
-          : new Error(String(signal.reason ?? "git was cancelled")),
-      );
-      return;
-    }
-    const child = spawn("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
-    let stdout = "";
-    let stderr = "";
-    let settled = false;
-    let timer: NodeJS.Timeout | undefined;
-    let forceKillTimer: NodeJS.Timeout | undefined;
-    let cancelled: Error | null = null;
-
-    const onAbort = () => {
-      cancelled =
-        signal?.reason instanceof Error
-          ? signal.reason
-          : new Error(String(signal?.reason ?? "git was cancelled"));
-      child.kill("SIGTERM");
-      forceKillTimer = setTimeout(() => child.kill("SIGKILL"), 2_000);
-      forceKillTimer.unref?.();
-    };
-    signal?.addEventListener("abort", onAbort, { once: true });
-
-    if (timeoutMs) {
-      timer = setTimeout(() => {
-        if (settled) return;
-        settled = true;
-        child.kill("SIGTERM");
-        forceKillTimer = setTimeout(() => child.kill("SIGKILL"), 2_000);
-        rejectP(new Error(`git ${args.join(" ")} timed out after ${timeoutMs}ms`));
-      }, timeoutMs);
-    }
-    child.stdout.on("data", (b) => {
-      const s = b.toString();
-      stdout += s;
-      onProgress?.({ type: "stdout", data: s });
-    });
-    child.stderr.on("data", (b) => {
-      const s = b.toString();
-      stderr += s;
-      onProgress?.({ type: "stderr", data: s });
-    });
-    child.on("close", (code) => {
-      signal?.removeEventListener("abort", onAbort);
-      if (timer) clearTimeout(timer);
-      if (forceKillTimer) clearTimeout(forceKillTimer);
-      if (settled) return;
-      settled = true;
-      if (cancelled) {
-        rejectP(cancelled);
-        return;
-      }
-      if (code !== 0) {
-        rejectP(new Error(`git ${args.join(" ")} exited ${code}: ${stderr.trim()}`));
-        return;
-      }
-      resolveP(stdout.trim());
-    });
-    child.on("error", (error) => {
-      signal?.removeEventListener("abort", onAbort);
-      if (timer) clearTimeout(timer);
-      if (forceKillTimer) clearTimeout(forceKillTimer);
-      if (settled) return;
-      settled = true;
-      rejectP(cancelled ?? error);
-    });
+  const result = await spawnCli({
+    cmd: "git",
+    args,
+    cwd,
+    onProgress,
+    timeoutMs,
+    signal,
   });
+  if (result.exitCode !== 0) {
+    throw new Error(`git ${args.join(" ")} exited ${result.exitCode}: ${result.stderr.trim()}`);
+  }
+  return result.stdout.trim();
 }
 
 export async function pruneWorktrees(repos: RepoRow[]): Promise<void> {

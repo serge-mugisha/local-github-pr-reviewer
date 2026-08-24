@@ -34,10 +34,15 @@ describe("preparePrHeadWorktree", () => {
   });
 
   function setupGitMock(responses: Record<string, string>) {
+    let invocation = 0;
     mockSpawn.mockImplementation((cmd: string, args: string[]) => {
+      invocation++;
       const ee: any = new EventEmitter();
       ee.stdout = new EventEmitter();
       ee.stderr = new EventEmitter();
+      ee.stdin = { end: vi.fn(), write: vi.fn() };
+      ee.kill = vi.fn();
+      ee.pid = 999_999_000 + invocation;
 
       let out = "";
 
@@ -110,7 +115,9 @@ describe("preparePrHeadWorktree", () => {
       const ee: any = new EventEmitter();
       ee.stdout = new EventEmitter();
       ee.stderr = new EventEmitter();
+      ee.stdin = { end: vi.fn(), write: vi.fn() };
       ee.kill = vi.fn();
+      ee.pid = 999_999_000 + invocation;
 
       if (invocation < 4) {
         const out = args[0] === "rev-parse" ? "test_sha" : "";
@@ -137,6 +144,7 @@ describe("preparePrHeadWorktree", () => {
     expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("timed out after 30000ms"));
     await vi.advanceTimersByTimeAsync(2_000);
     expect(cleanupChild.kill).toHaveBeenCalledWith("SIGKILL");
+    cleanupChild.emit("close", null);
     errorSpy.mockRestore();
   });
 

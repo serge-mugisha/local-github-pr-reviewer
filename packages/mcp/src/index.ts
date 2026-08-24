@@ -308,7 +308,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       {
         name: "get_job_status",
         description:
-          "Legacy non-blocking snapshot for an asynchronous job. Do not poll review jobs with this tool; call await_review once instead. Review jobId equals reviewId and survives MCP restarts.",
+          "Legacy non-blocking snapshot for an asynchronous job. Do not poll review jobs with this tool; call await_review once with the explicit reviewId instead. Only reviewId is guaranteed to survive MCP restarts; an uncached jobId is rejected to avoid confusing pre-0.4.1 job counters with unrelated reviews.",
         inputSchema: {
           type: "object",
           properties: {
