@@ -33,6 +33,7 @@ async function runClaude(
   prompt: string,
   cwd: string,
   onProgress?: ProviderProgress,
+  signal?: AbortSignal,
 ): Promise<ClaudeRun> {
   onProgress?.({ type: "log", data: `[claude] running in ${cwd}\n` });
   const args = ["-p", "--output-format", "json", "--permission-mode", "bypassPermissions"];
@@ -42,6 +43,7 @@ async function runClaude(
     cwd,
     stdin: prompt,
     onProgress,
+    signal,
     timeoutMs: 15 * 60 * 1000,
   });
   if (res.exitCode !== 0) {
@@ -120,9 +122,9 @@ export const claudeProvider: Provider = {
     return commandExists("claude");
   },
 
-  async review(ctx, onProgress) {
+  async review(ctx, onProgress, signal) {
     const prompt = buildReviewPrompt(ctx);
-    const { text, sessionIds } = await runClaude(prompt, ctx.cwd, onProgress);
+    const { text, sessionIds } = await runClaude(prompt, ctx.cwd, onProgress, signal);
     const { summary, comments } = parseReviewOutput(text);
     return { summary, comments, rawOutput: text, sessionIds } satisfies ReviewResult;
   },

@@ -194,6 +194,27 @@ describe("startReview", () => {
     expect(mocks.db.prepare("SELECT COUNT(*) AS count FROM threads").get()).toEqual({ count: 0 });
   });
 
+  it("does not mark existing threads stale when a review fails", async () => {
+    const threadId = Number(
+      mocks.db
+        .prepare(
+          `INSERT INTO threads
+             (pr_id, file_path, line, side, severity, status, first_seen_sha, last_seen_sha, stale, created_at)
+           VALUES (?, ?, ?, 'RIGHT', 'concern', 'open', ?, ?, 0, ?)`,
+        )
+        .run(mocks.pr.id, "src/old.ts", 1, "old-head", "old-head", new Date().toISOString())
+        .lastInsertRowid,
+    );
+    mocks.review.mockRejectedValue(new Error("provider failed"));
+
+    const started = startReview({ repo, pr: mocks.pr, providerId: "test" });
+    await expect(started.completion).rejects.toThrow("provider failed");
+
+    expect(mocks.db.prepare("SELECT stale FROM threads WHERE id = ?").get(threadId)).toEqual({
+      stale: 0,
+    });
+  });
+
   it("waits on persisted completion without depending on the owner promise", async () => {
     const startedAt = "2026-08-24T00:00:00.000Z";
     const reviewId = Number(
@@ -243,27 +264,27 @@ describe("startReview", () => {
 
   it("publishes a terminal error at the total lifecycle deadline", async () => {
     vi.useFakeTimers();
-    let releaseProvider!: (value: Awaited<ReturnType<typeof mocks.review>>) => void;
     try {
       mocks.review.mockImplementation(
-        () =>
-          new Promise((resolve) => {
-            releaseProvider = resolve;
+        (_ctx, _onProgress, signal: AbortSignal) =>
+          new Promise((_resolve, reject) => {
+            signal.addEventListener("abort", () => reject(signal.reason), { once: true });
           }),
       );
       const started = startReview({ repo, pr: mocks.pr, providerId: "test" });
+      const completion = expect(started.completion).rejects.toThrow(
+        "Review exceeded the 20-minute total lifecycle limit.",
+      );
       await vi.waitFor(() => expect(mocks.review).toHaveBeenCalledOnce());
 
       await vi.advanceTimersByTimeAsync(20 * 60 * 1_000);
+      await completion;
       expect(
         mocks.db.prepare("SELECT status, error FROM reviews WHERE id = ?").get(started.reviewId),
       ).toEqual({
         status: "error",
         error: "Review exceeded the 20-minute total lifecycle limit.",
       });
-
-      releaseProvider({ summary: "late", comments: [], rawOutput: "", sessionIds: [] });
-      await expect(started.completion).rejects.toThrow("lost its worker lease");
     } finally {
       vi.useRealTimers();
     }

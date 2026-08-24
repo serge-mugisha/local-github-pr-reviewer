@@ -902,9 +902,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
 async function main() {
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT"] as const) {
     const shutdown = () => {
-      api.terminateActiveCliChildren("SIGTERM");
       process.removeListener(signal, shutdown);
-      process.kill(process.pid, signal);
+      void api.shutdownActiveCliChildren().then(() => process.kill(process.pid, signal));
     };
     process.once(signal, shutdown);
   }

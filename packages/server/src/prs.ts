@@ -112,8 +112,12 @@ export function getPRById(prId: number): PrRow | undefined {
   return getDb().prepare("SELECT * FROM prs WHERE id = ?").get(prId) as PrRow | undefined;
 }
 
-export async function hydratePR(repo: RepoRow, prNumber: number): Promise<PrRow> {
-  const detail = await gh.getPR(repo.owner, repo.name, prNumber);
+export async function hydratePR(
+  repo: RepoRow,
+  prNumber: number,
+  signal?: AbortSignal,
+): Promise<PrRow> {
+  const detail = await gh.getPR(repo.owner, repo.name, prNumber, signal);
   const db = getDb();
   db.prepare(
     `

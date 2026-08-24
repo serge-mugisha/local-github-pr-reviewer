@@ -19,14 +19,35 @@ function runGit(
   cwd: string,
   onProgress?: ProviderProgress,
   timeoutMs?: number,
+  signal?: AbortSignal,
 ): Promise<string> {
   return new Promise((resolveP, rejectP) => {
+    if (signal?.aborted) {
+      rejectP(
+        signal.reason instanceof Error
+          ? signal.reason
+          : new Error(String(signal.reason ?? "git was cancelled")),
+      );
+      return;
+    }
     const child = spawn("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     let settled = false;
     let timer: NodeJS.Timeout | undefined;
     let forceKillTimer: NodeJS.Timeout | undefined;
+    let cancelled: Error | null = null;
+
+    const onAbort = () => {
+      cancelled =
+        signal?.reason instanceof Error
+          ? signal.reason
+          : new Error(String(signal?.reason ?? "git was cancelled"));
+      child.kill("SIGTERM");
+      forceKillTimer = setTimeout(() => child.kill("SIGKILL"), 2_000);
+      forceKillTimer.unref?.();
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
 
     if (timeoutMs) {
       timer = setTimeout(() => {
@@ -48,10 +69,15 @@ function runGit(
       onProgress?.({ type: "stderr", data: s });
     });
     child.on("close", (code) => {
+      signal?.removeEventListener("abort", onAbort);
       if (timer) clearTimeout(timer);
       if (forceKillTimer) clearTimeout(forceKillTimer);
       if (settled) return;
       settled = true;
+      if (cancelled) {
+        rejectP(cancelled);
+        return;
+      }
       if (code !== 0) {
         rejectP(new Error(`git ${args.join(" ")} exited ${code}: ${stderr.trim()}`));
         return;
@@ -59,11 +85,12 @@ function runGit(
       resolveP(stdout.trim());
     });
     child.on("error", (error) => {
+      signal?.removeEventListener("abort", onAbort);
       if (timer) clearTimeout(timer);
       if (forceKillTimer) clearTimeout(forceKillTimer);
       if (settled) return;
       settled = true;
-      rejectP(error);
+      rejectP(cancelled ?? error);
     });
   });
 }
@@ -147,8 +174,9 @@ export async function preparePrHeadWorktree(args: {
   repo: RepoRow;
   pr: Pick<PrRow, "number" | "head_sha">;
   onProgress?: ProviderProgress;
+  signal?: AbortSignal;
 }): Promise<PrWorktree> {
-  const { repo, pr, onProgress } = args;
+  const { repo, pr, onProgress, signal } = args;
 
   onProgress?.({
     type: "log",
@@ -167,10 +195,18 @@ export async function preparePrHeadWorktree(args: {
     ["fetch", "--no-tags", "origin", `+refs/pull/${pr.number}/head:${ref}`],
     repo.local_path,
     onProgress,
+    undefined,
+    signal,
   );
 
   // Verify the fetched ref matches the expected head_sha
-  const fetchedSha = await runGit(["rev-parse", ref], repo.local_path, onProgress);
+  const fetchedSha = await runGit(
+    ["rev-parse", ref],
+    repo.local_path,
+    onProgress,
+    undefined,
+    signal,
+  );
   if (fetchedSha !== pr.head_sha) {
     throw new Error(`Fetched SHA (${fetchedSha}) does not match PR head_sha (${pr.head_sha})`);
   }
@@ -180,6 +216,8 @@ export async function preparePrHeadWorktree(args: {
     ["worktree", "add", "--detach", worktreePath, pr.head_sha],
     repo.local_path,
     onProgress,
+    undefined,
+    signal,
   );
 
   return {

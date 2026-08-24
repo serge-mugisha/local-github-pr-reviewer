@@ -11,8 +11,18 @@ import { spawn } from "node:child_process";
 const ALLOWED_SUBCOMMANDS = new Set(["pr", "api", "auth"]);
 const ALLOWED_PR_VERBS = new Set(["list", "view", "diff"]);
 
-function ghJson<T>(args: string[]): Promise<T> {
+function abortReason(signal: AbortSignal, command: string): Error {
+  return signal.reason instanceof Error
+    ? signal.reason
+    : new Error(String(signal.reason ?? `${command} was cancelled`));
+}
+
+function ghJson<T>(args: string[], signal?: AbortSignal): Promise<T> {
   return new Promise((resolveP, rejectP) => {
+    if (signal?.aborted) {
+      rejectP(abortReason(signal, "gh"));
+      return;
+    }
     if (args.length === 0 || !ALLOWED_SUBCOMMANDS.has(args[0]!)) {
       rejectP(new Error(`gh subcommand not allowed: ${args[0]}`));
       return;
@@ -33,9 +43,24 @@ function ghJson<T>(args: string[]): Promise<T> {
     const child = spawn("gh", args, { stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
+    let cancelled: Error | null = null;
+    let forceKillTimer: NodeJS.Timeout | undefined;
+    const onAbort = () => {
+      cancelled = abortReason(signal!, "gh");
+      child.kill("SIGTERM");
+      forceKillTimer = setTimeout(() => child.kill("SIGKILL"), 2_000);
+      forceKillTimer.unref?.();
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
     child.stdout.on("data", (b) => (stdout += b.toString()));
     child.stderr.on("data", (b) => (stderr += b.toString()));
     child.on("close", (code) => {
+      signal?.removeEventListener("abort", onAbort);
+      if (forceKillTimer) clearTimeout(forceKillTimer);
+      if (cancelled) {
+        rejectP(cancelled);
+        return;
+      }
       if (code !== 0) {
         rejectP(new Error(`gh ${args.join(" ")} exited ${code}: ${stderr.trim()}`));
         return;
@@ -46,12 +71,20 @@ function ghJson<T>(args: string[]): Promise<T> {
         rejectP(new Error(`gh ${args.join(" ")} returned non-JSON: ${(e as Error).message}`));
       }
     });
-    child.on("error", rejectP);
+    child.on("error", (error) => {
+      signal?.removeEventListener("abort", onAbort);
+      if (forceKillTimer) clearTimeout(forceKillTimer);
+      rejectP(cancelled ?? error);
+    });
   });
 }
 
-function ghText(args: string[]): Promise<string> {
+function ghText(args: string[], signal?: AbortSignal): Promise<string> {
   return new Promise((resolveP, rejectP) => {
+    if (signal?.aborted) {
+      rejectP(abortReason(signal, "gh"));
+      return;
+    }
     if (args.length === 0 || !ALLOWED_SUBCOMMANDS.has(args[0]!)) {
       rejectP(new Error(`gh subcommand not allowed: ${args[0]}`));
       return;
@@ -63,16 +96,35 @@ function ghText(args: string[]): Promise<string> {
     const child = spawn("gh", args, { stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
+    let cancelled: Error | null = null;
+    let forceKillTimer: NodeJS.Timeout | undefined;
+    const onAbort = () => {
+      cancelled = abortReason(signal!, "gh");
+      child.kill("SIGTERM");
+      forceKillTimer = setTimeout(() => child.kill("SIGKILL"), 2_000);
+      forceKillTimer.unref?.();
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
     child.stdout.on("data", (b) => (stdout += b.toString()));
     child.stderr.on("data", (b) => (stderr += b.toString()));
     child.on("close", (code) => {
+      signal?.removeEventListener("abort", onAbort);
+      if (forceKillTimer) clearTimeout(forceKillTimer);
+      if (cancelled) {
+        rejectP(cancelled);
+        return;
+      }
       if (code !== 0) {
         rejectP(new Error(`gh ${args.join(" ")} exited ${code}: ${stderr.trim()}`));
         return;
       }
       resolveP(stdout);
     });
-    child.on("error", rejectP);
+    child.on("error", (error) => {
+      signal?.removeEventListener("abort", onAbort);
+      if (forceKillTimer) clearTimeout(forceKillTimer);
+      rejectP(cancelled ?? error);
+    });
   });
 }
 
@@ -153,20 +205,33 @@ export async function listClosedPRs(owner: string, name: string): Promise<GhPRSu
   return [...merged, ...closed];
 }
 
-export async function getPR(owner: string, name: string, number: number): Promise<GhPRDetail> {
-  return ghJson<GhPRDetail>([
-    "pr",
-    "view",
-    String(number),
-    "--repo",
-    `${owner}/${name}`,
-    "--json",
-    "number,title,state,headRefName,baseRefName,url,isDraft,createdAt,updatedAt,author,assignees,reviewRequests,body,headRefOid,baseRefOid,additions,deletions,changedFiles",
-  ]);
+export async function getPR(
+  owner: string,
+  name: string,
+  number: number,
+  signal?: AbortSignal,
+): Promise<GhPRDetail> {
+  return ghJson<GhPRDetail>(
+    [
+      "pr",
+      "view",
+      String(number),
+      "--repo",
+      `${owner}/${name}`,
+      "--json",
+      "number,title,state,headRefName,baseRefName,url,isDraft,createdAt,updatedAt,author,assignees,reviewRequests,body,headRefOid,baseRefOid,additions,deletions,changedFiles",
+    ],
+    signal,
+  );
 }
 
-export async function getPRDiff(owner: string, name: string, number: number): Promise<string> {
-  return ghText(["pr", "diff", String(number), "--repo", `${owner}/${name}`]);
+export async function getPRDiff(
+  owner: string,
+  name: string,
+  number: number,
+  signal?: AbortSignal,
+): Promise<string> {
+  return ghText(["pr", "diff", String(number), "--repo", `${owner}/${name}`], signal);
 }
 
 export interface GhFile {

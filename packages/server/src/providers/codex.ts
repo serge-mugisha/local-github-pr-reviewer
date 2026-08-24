@@ -66,6 +66,7 @@ async function runCodex(
   prompt: string,
   cwd: string,
   onProgress?: ProviderProgress,
+  signal?: AbortSignal,
 ): Promise<CodexRun> {
   onProgress?.({ type: "log", data: `[codex] running in ${cwd}\n` });
   const cfg = loadConfig().codex;
@@ -78,6 +79,7 @@ async function runCodex(
     cwd,
     stdin: prompt,
     onProgress,
+    signal,
     timeoutMs: 15 * 60 * 1000,
   });
   if (res.exitCode !== 0) {
@@ -129,9 +131,9 @@ export const codexProvider: Provider = {
     return commandExists("codex");
   },
 
-  async review(ctx, onProgress) {
+  async review(ctx, onProgress, signal) {
     const prompt = buildReviewPrompt(ctx);
-    const { text, sessionIds } = await runCodex(prompt, ctx.cwd, onProgress);
+    const { text, sessionIds } = await runCodex(prompt, ctx.cwd, onProgress, signal);
     const { summary, comments } = parseReviewOutput(text);
     return { summary, comments, rawOutput: text, sessionIds } satisfies ReviewResult;
   },

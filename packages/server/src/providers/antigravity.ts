@@ -32,6 +32,7 @@ async function runAntigravity(
   prompt: string,
   cwd: string,
   onProgress?: ProviderProgress,
+  signal?: AbortSignal,
 ): Promise<AntigravityRun> {
   onProgress?.({ type: "log", data: `[antigravity] running in ${cwd}\n` });
   const cfg = loadConfig().antigravity;
@@ -44,6 +45,7 @@ async function runAntigravity(
     args,
     cwd,
     onProgress,
+    signal,
     timeoutMs: 15 * 60 * 1000,
   });
   if (res.exitCode !== 0) {
@@ -63,9 +65,9 @@ export const antigravityProvider: Provider = {
     return commandExists("agy");
   },
 
-  async review(ctx, onProgress) {
+  async review(ctx, onProgress, signal) {
     const prompt = buildReviewPrompt(ctx);
-    const { text, sessionIds } = await runAntigravity(prompt, ctx.cwd, onProgress);
+    const { text, sessionIds } = await runAntigravity(prompt, ctx.cwd, onProgress, signal);
     const { summary, comments } = parseReviewOutput(text);
     return { summary, comments, rawOutput: text, sessionIds } satisfies ReviewResult;
   },

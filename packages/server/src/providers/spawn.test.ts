@@ -1,8 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   formatCliFailure,
+  shutdownActiveCliChildren,
   spawnCli,
-  terminateActiveCliChildren,
   type SpawnResult,
 } from "./spawn.js";
 
@@ -78,9 +78,41 @@ describe("spawnCli timeout", () => {
       cwd: process.cwd(),
     });
 
-    terminateActiveCliChildren("SIGTERM");
+    await shutdownActiveCliChildren(50);
 
     const result = await running;
     expect(result.exitCode).not.toBe(0);
+  });
+
+  it("does not release a cancelled provider until stubborn descendants are killed", async () => {
+    if (process.platform === "win32") return;
+    const descendantScript = "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)";
+    const parentScript = [
+      "const { spawn } = require('node:child_process')",
+      `const child = spawn(process.execPath, ['-e', ${JSON.stringify(descendantScript)}], { stdio: 'ignore' })`,
+      "console.log(child.pid)",
+      "setInterval(() => {}, 1000)",
+    ].join(";");
+    const controller = new AbortController();
+    let descendantPid = 0;
+    const running = spawnCli({
+      cmd: process.execPath,
+      args: ["-e", parentScript],
+      cwd: process.cwd(),
+      signal: controller.signal,
+      onProgress: (event) => {
+        if (event.type === "stdout") descendantPid = Number(event.data.trim()) || descendantPid;
+      },
+    });
+
+    await vi.waitFor(() => expect(descendantPid).toBeGreaterThan(0));
+    controller.abort(new Error("review lifecycle expired"));
+    await expect(running).rejects.toThrow("review lifecycle expired");
+    await vi.waitFor(
+      () => {
+        expect(() => process.kill(descendantPid, 0)).toThrow();
+      },
+      { timeout: 1_000 },
+    );
   });
 });

@@ -84,7 +84,11 @@ export interface Provider {
   id: "claude" | "antigravity" | "codex" | string;
   displayName: string;
   isAvailable(): Promise<boolean>;
-  review(ctx: ReviewContext, onProgress?: ProviderProgress): Promise<ReviewResult>;
+  review(
+    ctx: ReviewContext,
+    onProgress?: ProviderProgress,
+    signal?: AbortSignal,
+  ): Promise<ReviewResult>;
   reply(ctx: ReplyContext, onProgress?: ProviderProgress): Promise<ReplyResult>;
   revalidate(ctx: RevalidateContext, onProgress?: ProviderProgress): Promise<RevalidateResult>;
   /** Delete the on-disk chat sessions this provider persisted for the given

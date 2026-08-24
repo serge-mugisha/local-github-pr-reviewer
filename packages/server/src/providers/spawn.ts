@@ -19,6 +19,7 @@ export interface SpawnOptions {
   env?: NodeJS.ProcessEnv;
   onProgress?: ProviderProgress;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }
 
 export class CliTimeoutError extends Error {
@@ -51,10 +52,25 @@ const activeCliChildren = new Set<ReturnType<typeof spawn>>();
 export function terminateActiveCliChildren(signal: NodeJS.Signals = "SIGTERM"): void {
   for (const child of activeCliChildren) killProcessTree(child, signal);
 }
+
+export async function shutdownActiveCliChildren(graceMs = 2_000): Promise<void> {
+  // Snapshot the group leaders: their direct processes may close after
+  // SIGTERM and disappear from the active set while stubborn descendants in
+  // the same groups remain alive.
+  const processGroups = [...activeCliChildren];
+  for (const child of processGroups) killProcessTree(child, "SIGTERM");
+  if (processGroups.length === 0) return;
+  await new Promise<void>((resolveP) => setTimeout(resolveP, graceMs));
+  for (const child of processGroups) killProcessTree(child, "SIGKILL");
+}
 process.once("exit", () => terminateActiveCliChildren());
 
 export function spawnCli(opts: SpawnOptions): Promise<SpawnResult> {
   return new Promise((resolveP, rejectP) => {
+    if (opts.signal?.aborted) {
+      rejectP(opts.signal.reason ?? new Error(`${opts.cmd} was cancelled`));
+      return;
+    }
     const child = spawn(opts.cmd, opts.args, {
       cwd: opts.cwd,
       env: { ...process.env, ...opts.env },
@@ -68,6 +84,7 @@ export function spawnCli(opts: SpawnOptions): Promise<SpawnResult> {
     let timer: NodeJS.Timeout | null = null;
     let forceKillTimer: NodeJS.Timeout | null = null;
     let settled = false;
+    let cancellationError: Error | null = null;
 
     const clearTimers = () => {
       if (timer) clearTimeout(timer);
@@ -75,7 +92,7 @@ export function spawnCli(opts: SpawnOptions): Promise<SpawnResult> {
     };
 
     const finish = (result: SpawnResult) => {
-      if (settled) return;
+      if (settled || cancellationError) return;
       settled = true;
       activeCliChildren.delete(child);
       clearTimers();
@@ -91,6 +108,25 @@ export function spawnCli(opts: SpawnOptions): Promise<SpawnResult> {
       clearTimers();
       rejectP(error);
     };
+
+    const onAbort = () => {
+      if (settled || cancellationError) return;
+      cancellationError =
+        opts.signal?.reason instanceof Error
+          ? opts.signal.reason
+          : new Error(String(opts.signal?.reason ?? `${opts.cmd} was cancelled`));
+      if (timer) clearTimeout(timer);
+      killProcessTree(child, "SIGTERM");
+      // Hold the provider promise and therefore its review lease through the
+      // grace period. The direct child may exit while a descendant ignores
+      // SIGTERM, so only settle after process-group SIGKILL has run.
+      forceKillTimer = setTimeout(() => {
+        killProcessTree(child, "SIGKILL");
+        fail(cancellationError!);
+      }, 2_000);
+      forceKillTimer.unref?.();
+    };
+    opts.signal?.addEventListener("abort", onAbort, { once: true });
 
     if (opts.timeoutMs) {
       timer = setTimeout(() => {
@@ -116,10 +152,12 @@ export function spawnCli(opts: SpawnOptions): Promise<SpawnResult> {
     });
     child.on("close", (code) => {
       activeCliChildren.delete(child);
-      if (forceKillTimer) clearTimeout(forceKillTimer);
+      opts.signal?.removeEventListener("abort", onAbort);
       finish({ stdout, stderr, combinedOutput, exitCode: code ?? -1 });
     });
     child.on("error", (e) => {
+      opts.signal?.removeEventListener("abort", onAbort);
+      if (cancellationError) return;
       fail(e);
     });
 

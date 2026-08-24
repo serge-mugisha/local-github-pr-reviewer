@@ -251,18 +251,14 @@ async function completeReview(
         added_threads = ?, stale_marked = ?
     WHERE id = ? AND worker_token = ? AND status = 'running'
   `);
-  const executionTimer = setTimeout(() => {
-    db.prepare(
-      `UPDATE reviews
-       SET status = 'error', finished_at = ?, error = ?
-       WHERE id = ? AND worker_token = ? AND status = 'running'`,
-    ).run(
-      now(),
-      `Review exceeded the ${Math.round(REVIEW_EXECUTION_TIMEOUT_MS / 60_000)}-minute total lifecycle limit.`,
-      reviewId,
-      workerToken,
-    );
-  }, REVIEW_EXECUTION_TIMEOUT_MS);
+  const executionController = new AbortController();
+  const lifecycleError = new Error(
+    `Review exceeded the ${Math.round(REVIEW_EXECUTION_TIMEOUT_MS / 60_000)}-minute total lifecycle limit.`,
+  );
+  const executionTimer = setTimeout(
+    () => executionController.abort(lifecycleError),
+    REVIEW_EXECUTION_TIMEOUT_MS,
+  );
   executionTimer.unref?.();
   const assertLease = () => {
     const ownership = db
@@ -272,10 +268,10 @@ async function completeReview(
   };
 
   try {
-    const refreshed = await hydratePR(repo, pr.number);
+    const refreshed = await hydratePR(repo, pr.number, executionController.signal);
     assertLease();
     db.prepare("UPDATE reviews SET head_sha = ? WHERE id = ?").run(refreshed.head_sha, reviewId);
-    const diff = await gh.getPRDiff(repo.owner, repo.name, pr.number);
+    const diff = await gh.getPRDiff(repo.owner, repo.name, pr.number, executionController.signal);
     assertLease();
 
     const skills = getSkills(repo.id);
@@ -293,17 +289,12 @@ async function completeReview(
       )
       .all(refreshed.id) as (ThreadRow & { first_body: string | null })[];
 
-    // Mark threads on a different head_sha as stale (not resolved — user-only resolves)
-    let staleMarked = 0;
-    if (existingOpen.length > 0) {
-      const stmt = db.prepare("UPDATE threads SET stale = 1 WHERE id = ? AND last_seen_sha != ?");
-      for (const t of existingOpen) {
-        const r = stmt.run(t.id, refreshed.head_sha);
-        staleMarked += r.changes;
-      }
-    }
-
-    const wt = await preparePrHeadWorktree({ repo, pr: refreshed, onProgress });
+    const wt = await preparePrHeadWorktree({
+      repo,
+      pr: refreshed,
+      onProgress,
+      signal: executionController.signal,
+    });
     try {
       assertLease();
       const ctx: ReviewContext = {
@@ -332,7 +323,7 @@ async function completeReview(
         })),
       };
 
-      const result = await provider.review(ctx, onProgress);
+      const result = await provider.review(ctx, onProgress, executionController.signal);
       assertLease();
       recordSessions(refreshed.id, providerId, result.sessionIds, wt.cwd);
 
@@ -341,6 +332,7 @@ async function completeReview(
         existingOpen.map((t) => fingerprint(t.file_path, t.line, t.first_body ?? "")),
       );
       let added = 0;
+      let staleMarked = 0;
 
       const insertThread = db.prepare(`
       INSERT INTO threads (pr_id, file_path, line, side, severity, status, first_seen_sha, last_seen_sha, stale, created_at)
@@ -353,6 +345,15 @@ async function completeReview(
 
       const tx = db.transaction(() => {
         assertLease();
+        // Staleness is review output too. Publish it in the terminal
+        // transaction so a failed, cancelled, or fenced review changes no
+        // user-visible thread state.
+        const markStale = db.prepare(
+          "UPDATE threads SET stale = 1 WHERE id = ? AND last_seen_sha != ?",
+        );
+        for (const thread of existingOpen) {
+          staleMarked += markStale.run(thread.id, refreshed.head_sha).changes;
+        }
         for (const c of result.comments) {
           const fp = fingerprint(c.path, c.line, c.body);
           if (existingFps.has(fp)) continue;
