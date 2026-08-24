@@ -1226,7 +1226,7 @@ function ThreadCard({
           </button>
         </div>
       )}
-      {actionError && <div className="small error">{actionError}</div>}
+      {actionError && <div className="small thread-action-error">{actionError}</div>}
     </div>
   );
 }
