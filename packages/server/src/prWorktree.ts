@@ -129,36 +129,44 @@ export async function preparePrHeadWorktree(args: {
     `worktrees/repo-${repo.id}/pr-${pr.number}-${pr.head_sha}-${token}`,
   );
 
-  // Fetch the PR head to a reviewer-owned ref
-  const ref = `refs/reviewer/pr/${repo.id}/${pr.number}`;
-  await runGit(
-    ["fetch", "--no-tags", "origin", `+refs/pull/${pr.number}/head:${ref}`],
-    repo.local_path,
-    onProgress,
-    undefined,
-    signal,
-  );
+  // Every action gets its own ref. Concurrent reviews or revalidations of the
+  // same PR must never race while force-updating one shared ref.
+  const ref = `refs/reviewer/pr/${repo.id}/${pr.number}/${token}`;
+  try {
+    await runGit(
+      ["fetch", "--no-tags", "origin", `+refs/pull/${pr.number}/head:${ref}`],
+      repo.local_path,
+      onProgress,
+      undefined,
+      signal,
+    );
 
-  // Verify the fetched ref matches the expected head_sha
-  const fetchedSha = await runGit(
-    ["rev-parse", ref],
-    repo.local_path,
-    onProgress,
-    undefined,
-    signal,
-  );
-  if (fetchedSha !== pr.head_sha) {
-    throw new Error(`Fetched SHA (${fetchedSha}) does not match PR head_sha (${pr.head_sha})`);
+    const fetchedSha = await runGit(
+      ["rev-parse", ref],
+      repo.local_path,
+      onProgress,
+      undefined,
+      signal,
+    );
+    if (fetchedSha !== pr.head_sha) {
+      throw new Error(`Fetched SHA (${fetchedSha}) does not match PR head_sha (${pr.head_sha})`);
+    }
+
+    await runGit(
+      ["worktree", "add", "--detach", worktreePath, pr.head_sha],
+      repo.local_path,
+      onProgress,
+      undefined,
+      signal,
+    );
+  } catch (error) {
+    try {
+      await runGit(["update-ref", "-d", ref], repo.local_path, undefined, 5_000);
+    } catch {
+      // A later git prune can remove abandoned Reviewer refs.
+    }
+    throw error;
   }
-
-  // Create the detached worktree
-  await runGit(
-    ["worktree", "add", "--detach", worktreePath, pr.head_sha],
-    repo.local_path,
-    onProgress,
-    undefined,
-    signal,
-  );
 
   return {
     cwd: worktreePath,
@@ -170,6 +178,7 @@ export async function preparePrHeadWorktree(args: {
           undefined,
           WORKTREE_CLEANUP_TIMEOUT_MS,
         );
+        await runGit(["update-ref", "-d", ref], repo.local_path, undefined, 5_000);
       } catch (e) {
         // Cleanup runs after the review completion signal, so its original SSE
         // progress stream may already be closed. Report it to the process log.
