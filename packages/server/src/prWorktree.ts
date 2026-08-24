@@ -131,7 +131,9 @@ export async function preparePrHeadWorktree(args: {
 
   // Every action gets its own ref. Concurrent reviews or revalidations of the
   // same PR must never race while force-updating one shared ref.
-  const ref = `refs/reviewer/pr/${repo.id}/${pr.number}/${token}`;
+  // Keep this namespace disjoint from the historical
+  // refs/reviewer/pr/<repo>/<number> leaf refs already present in upgrades.
+  const ref = `refs/reviewer/actions/${repo.id}-${pr.number}-${token}`;
   try {
     await runGit(
       ["fetch", "--no-tags", "origin", `+refs/pull/${pr.number}/head:${ref}`],

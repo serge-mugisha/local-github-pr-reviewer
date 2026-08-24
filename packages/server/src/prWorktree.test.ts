@@ -81,7 +81,7 @@ describe("preparePrHeadWorktree", () => {
         "fetch",
         "--no-tags",
         "origin",
-        expect.stringMatching(/^\+refs\/pull\/42\/head:refs\/reviewer\/pr\/1\/42\/[0-9a-f]{8}$/),
+        expect.stringMatching(/^\+refs\/pull\/42\/head:refs\/reviewer\/actions\/1-42-[0-9a-f]{8}$/),
       ],
       expect.any(Object),
     );
@@ -100,7 +100,7 @@ describe("preparePrHeadWorktree", () => {
     );
     expect(mockSpawn).toHaveBeenCalledWith(
       "git",
-      ["update-ref", "-d", expect.stringMatching(/^refs\/reviewer\/pr\/1\/42\/[0-9a-f]{8}$/)],
+      ["update-ref", "-d", expect.stringMatching(/^refs\/reviewer\/actions\/1-42-[0-9a-f]{8}$/)],
       expect.any(Object),
     );
   });
