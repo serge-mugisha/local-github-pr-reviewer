@@ -25,6 +25,10 @@ function review(status: string): ReviewRow {
     heartbeat_at: "2026-08-13T00:00:05.000Z",
     finished_at: status === "running" ? null : "2026-08-13T00:03:30.000Z",
     error: status === "error" ? "provider failed" : null,
+    worker_token: "worker-1",
+    worker_pid: process.pid,
+    added_threads: status === "done" ? 2 : null,
+    stale_marked: status === "done" ? 1 : null,
   };
 }
 

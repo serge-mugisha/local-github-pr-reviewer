@@ -44,6 +44,8 @@ export function reconcileReviewJob(job: Job, review: ReviewRow): Job {
       headSha: review.head_sha,
       summary: review.summary,
       finishedAt: review.finished_at,
+      addedThreads: review.added_threads,
+      staleMarked: review.stale_marked,
       threadsReady: true,
     };
     delete next.error;

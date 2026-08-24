@@ -58,7 +58,11 @@ export function migrateDatabase(db: Database.Database): void {
       started_at TEXT NOT NULL,
       heartbeat_at TEXT,
       finished_at TEXT,
-      error TEXT
+      error TEXT,
+      worker_token TEXT,
+      worker_pid INTEGER,
+      added_threads INTEGER,
+      stale_marked INTEGER
     );
 
     CREATE TABLE IF NOT EXISTS threads (
@@ -176,6 +180,18 @@ export function migrateDatabase(db: Database.Database): void {
   if (!reviewColumns.some((column) => column.name === "heartbeat_at")) {
     db.exec("ALTER TABLE reviews ADD COLUMN heartbeat_at TEXT");
   }
+  if (!reviewColumns.some((column) => column.name === "worker_token")) {
+    db.exec("ALTER TABLE reviews ADD COLUMN worker_token TEXT");
+  }
+  if (!reviewColumns.some((column) => column.name === "worker_pid")) {
+    db.exec("ALTER TABLE reviews ADD COLUMN worker_pid INTEGER");
+  }
+  if (!reviewColumns.some((column) => column.name === "added_threads")) {
+    db.exec("ALTER TABLE reviews ADD COLUMN added_threads INTEGER");
+  }
+  if (!reviewColumns.some((column) => column.name === "stale_marked")) {
+    db.exec("ALTER TABLE reviews ADD COLUMN stale_marked INTEGER");
+  }
 
   const repoColumns = db.pragma("table_info(repos)") as { name: string }[];
   if (!repoColumns.some((column) => column.name === "reviewer_provider")) {
@@ -237,6 +253,10 @@ export interface ReviewRow {
   heartbeat_at: string | null;
   finished_at: string | null;
   error: string | null;
+  worker_token: string | null;
+  worker_pid: number | null;
+  added_threads: number | null;
+  stale_marked: number | null;
 }
 export interface ThreadRow {
   id: number;

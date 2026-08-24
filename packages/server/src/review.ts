@@ -19,6 +19,7 @@ import * as gh from "./github.js";
 import { hydratePR } from "./prs.js";
 import { recordSessions } from "./sessions.js";
 import { preparePrHeadWorktree, type PrWorktree } from "./prWorktree.js";
+import { randomUUID } from "node:crypto";
 
 function now(): string {
   return new Date().toISOString();
@@ -26,20 +27,51 @@ function now(): string {
 
 const REVIEW_HEARTBEAT_MS = 5_000;
 const REVIEW_STALE_AFTER_MS = 30_000;
+const REVIEW_HARD_STALE_AFTER_MS = 20 * 60 * 1_000;
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 export function reconcileInterruptedReviews(): number {
   const finishedAt = now();
   const staleBefore = new Date(Date.now() - REVIEW_STALE_AFTER_MS).toISOString();
-  return getDb()
+  const hardStaleBefore = new Date(Date.now() - REVIEW_HARD_STALE_AFTER_MS).toISOString();
+  const db = getDb();
+  const candidates = db
     .prepare(
-      `
-      UPDATE reviews
-      SET status = 'error', finished_at = ?, error = 'Review interrupted before completion.'
-      WHERE status = 'running'
-        AND (heartbeat_at IS NULL OR heartbeat_at < ?)
-    `,
+      `SELECT id, worker_pid, heartbeat_at
+       FROM reviews
+       WHERE status = 'running'
+         AND (heartbeat_at IS NULL OR heartbeat_at < ?)`,
     )
-    .run(finishedAt, staleBefore).changes;
+    .all(staleBefore) as Pick<ReviewRow, "id" | "worker_pid" | "heartbeat_at">[];
+  const interrupt = db.prepare(
+    `UPDATE reviews
+     SET status = 'error', finished_at = ?, error = 'Review interrupted before completion.'
+     WHERE id = ? AND status = 'running'`,
+  );
+  let changed = 0;
+  for (const review of candidates) {
+    // Laptop sleep pauses the worker and its heartbeat together. A living
+    // owner PID is stronger liveness evidence than the clock until the hard
+    // ceiling, after which a wedged process may be safely fenced and replaced.
+    if (
+      review.worker_pid !== null &&
+      isProcessAlive(review.worker_pid) &&
+      review.heartbeat_at !== null &&
+      review.heartbeat_at >= hardStaleBefore
+    ) {
+      continue;
+    }
+    changed += interrupt.run(finishedAt, review.id).changes;
+  }
+  return changed;
 }
 
 function fingerprint(path: string | null, line: number | null, body: string): string {
@@ -58,8 +90,8 @@ export interface RunReviewArgs {
 
 export interface RunReviewResult {
   reviewId: number;
-  addedThreads?: number;
-  staleMarked?: number;
+  addedThreads: number;
+  staleMarked: number;
 }
 
 export interface StartedReview {
@@ -143,7 +175,7 @@ export function startReview(args: RunReviewArgs): StartedReview {
   // server shares this database, so only the winner inserts and runs a
   // provider; all concurrent callers join the same durable review.
   const claim = db
-    .transaction((): { reviewId: number; created: boolean } => {
+    .transaction((): { reviewId: number; created: boolean; workerToken?: string } => {
       reconcileInterruptedReviews();
       const active = db
         .prepare(
@@ -154,28 +186,41 @@ export function startReview(args: RunReviewArgs): StartedReview {
 
       beforeCreate?.();
       const startedAt = now();
+      const workerToken = randomUUID();
       const reviewId = Number(
         db
           .prepare(
-            `INSERT INTO reviews (pr_id, head_sha, provider, status, started_at, heartbeat_at)
-           VALUES (?, ?, ?, 'running', ?, ?)`,
+            `INSERT INTO reviews
+               (pr_id, head_sha, provider, status, started_at, heartbeat_at, worker_token, worker_pid)
+             VALUES (?, ?, ?, 'running', ?, ?, ?, ?)`,
           )
-          .run(pr.id, pr.head_sha, providerId, startedAt, startedAt).lastInsertRowid,
+          .run(pr.id, pr.head_sha, providerId, startedAt, startedAt, workerToken, process.pid)
+          .lastInsertRowid,
       );
-      return { reviewId, created: true };
+      return { reviewId, created: true, workerToken };
     })
     .immediate();
 
   if (!claim.created) {
     return {
       ...claim,
-      completion: waitForReview(claim.reviewId).then(() => ({ reviewId: claim.reviewId })),
+      completion: waitForReview(claim.reviewId).then((review) => ({
+        reviewId: claim.reviewId,
+        addedThreads: review.added_threads ?? 0,
+        staleMarked: review.stale_marked ?? 0,
+      })),
     };
   }
 
   return {
     ...claim,
-    completion: completeReview({ repo, pr, providerId, onProgress }, claim.reviewId, provider, db),
+    completion: completeReview(
+      { repo, pr, providerId, onProgress },
+      claim.reviewId,
+      claim.workerToken!,
+      provider,
+      db,
+    ),
   };
 }
 
@@ -186,23 +231,38 @@ export function runReview(args: RunReviewArgs): Promise<RunReviewResult> {
 async function completeReview(
   args: RunReviewArgs,
   reviewId: number,
+  workerToken: string,
   provider: ReturnType<typeof getProvider>,
   db: ReturnType<typeof getDb>,
 ): Promise<RunReviewResult> {
   const { repo, pr, providerId, onProgress } = args;
   const heartbeat = db.prepare(
-    "UPDATE reviews SET heartbeat_at = ? WHERE id = ? AND status = 'running'",
+    "UPDATE reviews SET heartbeat_at = ? WHERE id = ? AND worker_token = ? AND status = 'running'",
   );
-  const heartbeatTimer = setInterval(() => heartbeat.run(now(), reviewId), REVIEW_HEARTBEAT_MS);
+  const heartbeatTimer = setInterval(
+    () => heartbeat.run(now(), reviewId, workerToken),
+    REVIEW_HEARTBEAT_MS,
+  );
 
   const reviewFinish = db.prepare(`
-    UPDATE reviews SET status = ?, summary = ?, finished_at = ?, error = ? WHERE id = ?
+    UPDATE reviews
+    SET status = ?, summary = ?, finished_at = ?, error = ?,
+        added_threads = ?, stale_marked = ?
+    WHERE id = ? AND worker_token = ? AND status = 'running'
   `);
+  const assertLease = () => {
+    const ownership = db
+      .prepare("SELECT 1 FROM reviews WHERE id = ? AND worker_token = ? AND status = 'running'")
+      .get(reviewId, workerToken);
+    if (!ownership) throw new Error(`Review ${reviewId} lost its worker lease before publication.`);
+  };
 
   try {
     const refreshed = await hydratePR(repo, pr.number);
+    assertLease();
     db.prepare("UPDATE reviews SET head_sha = ? WHERE id = ?").run(refreshed.head_sha, reviewId);
     const diff = await gh.getPRDiff(repo.owner, repo.name, pr.number);
+    assertLease();
 
     const skills = getSkills(repo.id);
     const prConfig = getPrReviewConfig(refreshed.id);
@@ -231,6 +291,7 @@ async function completeReview(
 
     const wt = await preparePrHeadWorktree({ repo, pr: refreshed, onProgress });
     try {
+      assertLease();
       const ctx: ReviewContext = {
         cwd: wt.cwd,
         prTitle: refreshed.title,
@@ -258,6 +319,7 @@ async function completeReview(
       };
 
       const result = await provider.review(ctx, onProgress);
+      assertLease();
       recordSessions(refreshed.id, providerId, result.sessionIds, wt.cwd);
 
       // Dedupe + insert
@@ -276,6 +338,7 @@ async function completeReview(
     `);
 
       const tx = db.transaction(() => {
+        assertLease();
         for (const c of result.comments) {
           const fp = fingerprint(c.path, c.line, c.body);
           if (existingFps.has(fp)) continue;
@@ -297,7 +360,19 @@ async function completeReview(
         // Publish the terminal state in the same commit as its threads. A
         // waiter can therefore never observe "done" without all findings or
         // findings that belong to a still-running review.
-        reviewFinish.run("done", result.summary, now(), null, reviewId);
+        const published = reviewFinish.run(
+          "done",
+          result.summary,
+          now(),
+          null,
+          added,
+          staleMarked,
+          reviewId,
+          workerToken,
+        );
+        if (published.changes !== 1) {
+          throw new Error(`Review ${reviewId} lost its worker lease before publication.`);
+        }
       });
       tx();
       return { reviewId, addedThreads: added, staleMarked };
@@ -305,7 +380,7 @@ async function completeReview(
       cleanupWorktreeInBackground(wt);
     }
   } catch (e) {
-    reviewFinish.run("error", null, now(), (e as Error).message, reviewId);
+    reviewFinish.run("error", null, now(), (e as Error).message, null, null, reviewId, workerToken);
     throw e;
   } finally {
     clearInterval(heartbeatTimer);

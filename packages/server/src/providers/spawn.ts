@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import type { ProviderProgress } from "./types.js";
 
 const MAX_FAILURE_OUTPUT_CHARS = 64 * 1024;
@@ -31,8 +31,13 @@ function killProcessTree(child: ReturnType<typeof spawn>, signal: NodeJS.Signals
     // Providers can spawn helpers that inherit stdout/stderr. Killing only the
     // direct child can leave those pipes open forever, so use a process group
     // on POSIX and fall back to the direct child on Windows.
-    if (process.platform === "win32") child.kill(signal);
-    else process.kill(-child.pid, signal);
+    if (process.platform === "win32") {
+      spawnSync(
+        "taskkill",
+        ["/PID", String(child.pid), "/T", ...(signal === "SIGKILL" ? ["/F"] : [])],
+        { stdio: "ignore", windowsHide: true },
+      );
+    } else process.kill(-child.pid, signal);
   } catch {
     try {
       child.kill(signal);

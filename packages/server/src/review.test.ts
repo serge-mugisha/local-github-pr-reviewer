@@ -1,7 +1,7 @@
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { migrateDatabase, type PrRow, type RepoRow } from "./db.js";
-import { startReview, waitForReview } from "./review.js";
+import { reconcileInterruptedReviews, startReview, waitForReview } from "./review.js";
 
 const mocks = vi.hoisted(() => ({
   db: undefined as unknown as Database.Database,
@@ -148,8 +148,50 @@ describe("startReview", () => {
     });
 
     await expect(first.completion).resolves.toMatchObject({ reviewId: first.reviewId });
-    await expect(second.completion).resolves.toEqual({ reviewId: first.reviewId });
+    await expect(second.completion).resolves.toEqual({
+      reviewId: first.reviewId,
+      addedThreads: 0,
+      staleMarked: 0,
+    });
     expect(mocks.review).toHaveBeenCalledOnce();
+  });
+
+  it("fences a stale worker from publishing after its lease is reclaimed", async () => {
+    let releaseProvider!: (value: Awaited<ReturnType<typeof mocks.review>>) => void;
+    mocks.review.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          releaseProvider = resolve;
+        }),
+    );
+    const stale = startReview({ repo, pr: mocks.pr, providerId: "test" });
+    await vi.waitFor(() => expect(mocks.review).toHaveBeenCalledOnce());
+    mocks.db
+      .prepare(
+        "UPDATE reviews SET status = 'error', finished_at = ?, error = 'lease reclaimed' WHERE id = ?",
+      )
+      .run(new Date().toISOString(), stale.reviewId);
+
+    releaseProvider({
+      summary: "stale result",
+      comments: [
+        {
+          path: "src/stale.ts",
+          line: 1,
+          side: "RIGHT",
+          severity: "concern",
+          body: "must not publish",
+        },
+      ],
+      rawOutput: "",
+      sessionIds: [],
+    });
+
+    await expect(stale.completion).rejects.toThrow("lost its worker lease");
+    expect(
+      mocks.db.prepare("SELECT status, error FROM reviews WHERE id = ?").get(stale.reviewId),
+    ).toEqual({ status: "error", error: "lease reclaimed" });
+    expect(mocks.db.prepare("SELECT COUNT(*) AS count FROM threads").get()).toEqual({ count: 0 });
   });
 
   it("waits on persisted completion without depending on the owner promise", async () => {
@@ -172,5 +214,30 @@ describe("startReview", () => {
     }, 10);
 
     await expect(waiting).resolves.toMatchObject({ id: reviewId, status: "done" });
+  });
+
+  it("does not reclaim a sleeping review while its owner process is alive", () => {
+    const old = new Date(Date.now() - 60_000).toISOString();
+    const reviewId = Number(
+      mocks.db
+        .prepare(
+          `INSERT INTO reviews
+             (pr_id, head_sha, provider, status, started_at, heartbeat_at, worker_token, worker_pid)
+           VALUES (?, ?, ?, 'running', ?, ?, ?, ?)`,
+        )
+        .run(mocks.pr.id, mocks.pr.head_sha, "test", old, old, "worker", process.pid)
+        .lastInsertRowid,
+    );
+
+    expect(reconcileInterruptedReviews()).toBe(0);
+    expect(mocks.db.prepare("SELECT status FROM reviews WHERE id = ?").get(reviewId)).toEqual({
+      status: "running",
+    });
+
+    mocks.db.prepare("UPDATE reviews SET worker_pid = ? WHERE id = ?").run(999_999_999, reviewId);
+    expect(reconcileInterruptedReviews()).toBe(1);
+    expect(mocks.db.prepare("SELECT status FROM reviews WHERE id = ?").get(reviewId)).toEqual({
+      status: "error",
+    });
   });
 });
