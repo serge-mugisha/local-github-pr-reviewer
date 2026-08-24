@@ -518,8 +518,7 @@ export function claimThreadAction(
 ): { actionId: number; created: boolean; workerToken?: string } {
   return db
     .transaction(() => {
-      if (args.beforeClaim) args.beforeClaim();
-      else reconcileInterruptedThreadActions(db);
+      args.beforeClaim?.();
       const active = db
         .prepare(
           `SELECT id, kind, input
@@ -629,6 +628,7 @@ function startThreadAction<T>(args: {
   kind: ThreadActionKind;
   input: string;
   providerId: string;
+  beforeCreate?: () => void;
   execute(signal: AbortSignal): Promise<PreparedThreadAction<T>>;
 }): StartedThreadAction<T> {
   const db = getDb();
@@ -641,6 +641,8 @@ function startThreadAction<T>(args: {
     startedAt: now(),
     workerToken: randomUUID(),
     workerPid: process.pid,
+    beforeClaim: () => reconcileInterruptedThreadActions(db),
+    beforeCreate: args.beforeCreate,
   });
 
   if (!claim.created) {
@@ -766,10 +768,7 @@ async function prepareReply(
       repoSlug: `${repo.owner}/${repo.name}`,
       headSha: refreshed.head_sha,
       threadAnchor: { path: thread.file_path, line: thread.line },
-      threadHistory: [
-        ...history.map((c) => ({ author: c.author as "ai" | "user", body: c.body })),
-        { author: "user" as const, body: userMessage },
-      ],
+      threadHistory: history.map((c) => ({ author: c.author as "ai" | "user", body: c.body })),
       userMessage,
       skills: getSkills(repo.id),
     };
@@ -778,10 +777,6 @@ async function prepareReply(
     recordSessions(refreshed.id, providerId, result.sessionIds, wt.cwd);
     return {
       publish: () => {
-        db.prepare(
-          `INSERT INTO comments (thread_id, author, body, head_sha, kind, created_at)
-           VALUES (?, 'user', ?, ?, 'normal', ?)`,
-        ).run(threadId, userMessage, refreshed.head_sha, now());
         const aiCommentId = Number(
           db
             .prepare(
@@ -796,11 +791,6 @@ async function prepareReply(
   } finally {
     cleanupWorktreeInBackground(wt);
   }
-}
-
-export async function runReply(args: ReplyArgs): Promise<{ aiCommentId: number }> {
-  const prepared = await prepareReply(args);
-  return getDb().transaction(prepared.publish).immediate();
 }
 
 export interface RevalidateArgs {
@@ -879,20 +869,23 @@ async function prepareRevalidate(
   }
 }
 
-export async function runRevalidate(
-  args: RevalidateArgs,
-): Promise<{ resolved: boolean; commentId: number }> {
-  const prepared = await prepareRevalidate(args);
-  return getDb().transaction(prepared.publish).immediate();
-}
-
 export function startReply(args: ReplyArgs): StartedThreadAction<{ aiCommentId: number }> {
+  const db = getDb();
   return startThreadAction({
     threadId: args.threadId,
     prId: args.pr.id,
     kind: "reply",
     input: args.userMessage,
     providerId: args.providerId,
+    beforeCreate: () => {
+      // Persist the user's input in the same transaction that claims the
+      // action. Provider failure must never make a submitted message vanish,
+      // while joined callers must not duplicate it.
+      db.prepare(
+        `INSERT INTO comments (thread_id, author, body, head_sha, kind, created_at)
+         VALUES (?, 'user', ?, ?, 'normal', ?)`,
+      ).run(args.threadId, args.userMessage, args.pr.head_sha, now());
+    },
     execute: (signal) => prepareReply({ ...args, signal }),
   });
 }

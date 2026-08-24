@@ -486,14 +486,20 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     sseInit(reply);
     sseSend(reply, "log", { message: `replying with ${providerId}…` });
     try {
-      const result = await startReply({
+      const started = startReply({
         repo,
         pr,
         threadId,
         userMessage: body.body,
         providerId,
         onProgress: (e) => sseSend(reply, e.type, e),
-      }).completion;
+      });
+      if (!started.created) {
+        sseSend(reply, "log", {
+          message: `attached to active reply action ${started.actionId}; waiting for its result…`,
+        });
+      }
+      const result = await started.completion;
       sseSend(reply, "done", result);
     } catch (e) {
       sseSend(reply, "error", { message: (e as Error).message });
@@ -517,13 +523,19 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     sseInit(reply);
     sseSend(reply, "log", { message: `revalidating with ${providerId}…` });
     try {
-      const result = await startRevalidate({
+      const started = startRevalidate({
         repo,
         pr,
         threadId,
         providerId,
         onProgress: (e) => sseSend(reply, e.type, e),
-      }).completion;
+      });
+      if (!started.created) {
+        sseSend(reply, "log", {
+          message: `attached to active revalidation action ${started.actionId}; waiting for its result…`,
+        });
+      }
+      const result = await started.completion;
       sseSend(reply, "done", result);
     } catch (e) {
       sseSend(reply, "error", { message: (e as Error).message });

@@ -19,19 +19,12 @@ import { resolveThreadActionStatus } from "./threadActionStatus.js";
 const jobs = new Map<number, Job>();
 const MAX_JOBS = 100;
 
-function launchJob(
-  type: string,
-  promise: Promise<unknown>,
-  metadata: Pick<Job, "reviewId" | "prId"> = {},
-) {
-  if (metadata.reviewId === undefined) {
-    throw new Error("Durable review jobs require a reviewId.");
-  }
+function launchJob(promise: Promise<unknown>, metadata: { reviewId: number; prId?: number }) {
   const jobId = metadata.reviewId;
   const job: Job = {
     id: jobId,
     status: "running",
-    type,
+    type: "review",
     startedAt: new Date().toISOString(),
     ...metadata,
   };
@@ -72,6 +65,32 @@ function launchJob(
             status: "running",
             reviewId: metadata.reviewId,
             prId: metadata.prId,
+          },
+          null,
+          2,
+        ),
+      },
+    ],
+  };
+}
+
+function threadActionLaunchResponse(started: api.StartedThreadAction<unknown>) {
+  void started.completion.catch(() => {
+    // Durable action state records the failure for await/recovery callers.
+  });
+  return {
+    content: [
+      {
+        type: "text" as const,
+        text: JSON.stringify(
+          {
+            actionId: started.actionId,
+            type: started.kind,
+            status: "running",
+            created: started.created,
+            joined: !started.created,
+            nextAction:
+              "Call await_thread_action once with this actionId. Do not poll or start another action on this thread.",
           },
           null,
           2,
@@ -855,7 +874,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
                 })
             : undefined,
         });
-        const launched = launchJob("review", started.completion, {
+        const launched = launchJob(started.completion, {
           reviewId: started.reviewId,
           prId,
         });
@@ -879,29 +898,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
         const repo = requireRepo(pr.repo_id);
         const providerId = api.resolveReviewerProvider(repo, pr).provider;
         const started = api.startReply({ repo, pr, threadId, userMessage: message, providerId });
-        void started.completion.catch(() => {
-          // Durable action state records the failure for await/recovery callers.
-        });
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(
-                {
-                  actionId: started.actionId,
-                  type: started.kind,
-                  status: "running",
-                  created: started.created,
-                  joined: !started.created,
-                  nextAction:
-                    "Call await_thread_action once with this actionId. Do not poll or start another action on this thread.",
-                },
-                null,
-                2,
-              ),
-            },
-          ],
-        };
+        return threadActionLaunchResponse(started);
       }
       case "revalidate_thread": {
         const { threadId } = z.object({ threadId: z.number() }).parse(request.params.arguments);
@@ -913,29 +910,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
         const repo = requireRepo(pr.repo_id);
         const providerId = api.resolveReviewerProvider(repo, pr).provider;
         const started = api.startRevalidate({ repo, pr, threadId, providerId });
-        void started.completion.catch(() => {
-          // Durable action state records the failure for await/recovery callers.
-        });
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(
-                {
-                  actionId: started.actionId,
-                  type: started.kind,
-                  status: "running",
-                  created: started.created,
-                  joined: !started.created,
-                  nextAction:
-                    "Call await_thread_action once with this actionId. Do not poll or start another action on this thread.",
-                },
-                null,
-                2,
-              ),
-            },
-          ],
-        };
+        return threadActionLaunchResponse(started);
       }
       case "get_thread_action": {
         const { actionId, threadId } = z

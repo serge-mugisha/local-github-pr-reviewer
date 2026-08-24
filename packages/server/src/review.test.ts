@@ -424,7 +424,7 @@ describe("durable thread actions", () => {
     ]);
   });
 
-  it("fences a reclaimed reply without publishing partial comments", async () => {
+  it("fences a reclaimed reply without publishing stale AI output", async () => {
     const threadId = createThread();
     let releaseReply!: (value: { body: string; rawOutput: string; sessionIds: string[] }) => void;
     mocks.reply.mockImplementation(
@@ -450,8 +450,125 @@ describe("durable thread actions", () => {
     releaseReply({ body: "Stale reply", rawOutput: "", sessionIds: [] });
     await expect(started.completion).rejects.toThrow("lost its worker lease");
     expect(
-      mocks.db.prepare("SELECT COUNT(*) AS count FROM comments WHERE thread_id = ?").get(threadId),
-    ).toEqual({ count: 0 });
+      mocks.db
+        .prepare("SELECT author, body FROM comments WHERE thread_id = ? ORDER BY id")
+        .all(threadId),
+    ).toEqual([{ author: "user", body: "Do not publish this twice." }]);
+  });
+
+  it("keeps the user's submitted reply when the provider fails", async () => {
+    const threadId = createThread();
+    mocks.reply.mockRejectedValue(new Error("provider unavailable"));
+
+    const started = startReply({
+      repo,
+      pr: mocks.pr,
+      threadId,
+      userMessage: "Please keep this message.",
+      providerId: "test",
+    });
+
+    await expect(started.completion).rejects.toThrow("provider unavailable");
+    expect(
+      mocks.db
+        .prepare("SELECT author, body FROM comments WHERE thread_id = ? ORDER BY id")
+        .all(threadId),
+    ).toEqual([{ author: "user", body: "Please keep this message." }]);
+    expect(
+      mocks.db
+        .prepare("SELECT status, error FROM thread_actions WHERE id = ?")
+        .get(started.actionId),
+    ).toEqual({ status: "error", error: "provider unavailable" });
+  });
+
+  it("rejects conflicting active actions and differing reply input", async () => {
+    const replyThreadId = createThread();
+    let releaseReply!: (value: { body: string; rawOutput: string; sessionIds: string[] }) => void;
+    mocks.reply.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          releaseReply = resolve;
+        }),
+    );
+    const activeReply = startReply({
+      repo,
+      pr: mocks.pr,
+      threadId: replyThreadId,
+      userMessage: "original",
+      providerId: "test",
+    });
+    expect(() =>
+      startRevalidate({ repo, pr: mocks.pr, threadId: replyThreadId, providerId: "test" }),
+    ).toThrow(`Thread ${replyThreadId} already has active reply action ${activeReply.actionId}`);
+    expect(() =>
+      startReply({
+        repo,
+        pr: mocks.pr,
+        threadId: replyThreadId,
+        userMessage: "different",
+        providerId: "test",
+      }),
+    ).toThrow(`Thread ${replyThreadId} already has active reply action ${activeReply.actionId}`);
+    await vi.waitFor(() => expect(mocks.reply).toHaveBeenCalledOnce());
+    releaseReply({ body: "done", rawOutput: "", sessionIds: [] });
+    await activeReply.completion;
+
+    const revalidateThreadId = createThread();
+    let releaseRevalidate!: (value: {
+      resolved: boolean;
+      body: string;
+      rawOutput: string;
+      sessionIds: string[];
+    }) => void;
+    mocks.revalidate.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          releaseRevalidate = resolve;
+        }),
+    );
+    const activeRevalidate = startRevalidate({
+      repo,
+      pr: mocks.pr,
+      threadId: revalidateThreadId,
+      providerId: "test",
+    });
+    expect(() =>
+      startReply({
+        repo,
+        pr: mocks.pr,
+        threadId: revalidateThreadId,
+        userMessage: "conflict",
+        providerId: "test",
+      }),
+    ).toThrow(
+      `Thread ${revalidateThreadId} already has active revalidate action ${activeRevalidate.actionId}`,
+    );
+    await vi.waitFor(() => expect(mocks.revalidate).toHaveBeenCalledOnce());
+    releaseRevalidate({ resolved: false, body: "not yet", rawOutput: "", sessionIds: [] });
+    await activeRevalidate.completion;
+  });
+
+  it("passes the lifecycle AbortSignal to reply and revalidation providers", async () => {
+    const replyThreadId = createThread();
+    const reply = startReply({
+      repo,
+      pr: mocks.pr,
+      threadId: replyThreadId,
+      userMessage: "signal check",
+      providerId: "test",
+    });
+    await reply.completion;
+    expect(mocks.reply.mock.calls[0]?.[2]).toBeInstanceOf(AbortSignal);
+
+    const revalidateThreadId = createThread();
+    const revalidate = startRevalidate({
+      repo,
+      pr: mocks.pr,
+      threadId: revalidateThreadId,
+      providerId: "test",
+    });
+    await revalidate.completion;
+    expect(mocks.revalidate.mock.calls[0]?.[2]).toBeInstanceOf(AbortSignal);
   });
 
   it("commits revalidation, resolution, and durable completion together", async () => {

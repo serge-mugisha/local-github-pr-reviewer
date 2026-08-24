@@ -1142,13 +1142,18 @@ function ThreadCard({
 }) {
   const [reply, setReply] = useState("");
   const [streaming, setStreaming] = useState<null | "reply" | "revalidate">(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   async function sendReply() {
     if (!reply.trim()) return;
     setStreaming("reply");
+    setActionError(null);
     try {
       await postSse(`/api/threads/${thread.id}/messages`, { body: reply }, () => {});
       setReply("");
+      onChange();
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : String(error));
       onChange();
     } finally {
       setStreaming(null);
@@ -1157,9 +1162,12 @@ function ThreadCard({
 
   async function revalidate() {
     setStreaming("revalidate");
+    setActionError(null);
     try {
       await postSse(`/api/threads/${thread.id}/revalidate`, {}, () => {});
       onChange();
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : String(error));
     } finally {
       setStreaming(null);
     }
@@ -1218,6 +1226,7 @@ function ThreadCard({
           </button>
         </div>
       )}
+      {actionError && <div className="small error">{actionError}</div>}
     </div>
   );
 }
