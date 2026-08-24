@@ -3,8 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { migrateDatabase, type PrRow, type RepoRow } from "./db.js";
 import {
   abortLocalReviewWork,
+  reconcileInterruptedThreadActions,
   reconcileInterruptedReviews,
+  startReply,
+  startRevalidate,
   startReview,
+  waitForThreadAction,
   waitForReview,
 } from "./review.js";
 
@@ -12,6 +16,8 @@ const mocks = vi.hoisted(() => ({
   db: undefined as unknown as Database.Database,
   pr: undefined as unknown as PrRow,
   review: vi.fn(),
+  reply: vi.fn(),
+  revalidate: vi.fn(),
   cleanup: vi.fn(),
 }));
 
@@ -21,7 +27,11 @@ vi.mock("./db.js", async (importOriginal) => {
 });
 
 vi.mock("./providers/index.js", () => ({
-  getProvider: () => ({ review: mocks.review }),
+  getProvider: () => ({
+    review: mocks.review,
+    reply: mocks.reply,
+    revalidate: mocks.revalidate,
+  }),
 }));
 
 vi.mock("./skills.js", () => ({ getSkills: () => "" }));
@@ -79,6 +89,8 @@ beforeEach(() => {
     );
   mocks.pr = mocks.db.prepare("SELECT * FROM prs WHERE id = 10").get() as PrRow;
   mocks.review.mockReset();
+  mocks.reply.mockReset();
+  mocks.revalidate.mockReset();
   mocks.cleanup.mockReset();
   mocks.cleanup.mockResolvedValue(undefined);
   mocks.review.mockResolvedValue({
@@ -95,11 +107,30 @@ beforeEach(() => {
     rawOutput: "",
     sessionIds: [],
   });
+  mocks.reply.mockResolvedValue({ body: "Reply", rawOutput: "", sessionIds: [] });
+  mocks.revalidate.mockResolvedValue({
+    resolved: true,
+    body: "Fixed",
+    rawOutput: "",
+    sessionIds: [],
+  });
 });
 
 afterEach(() => {
   mocks.db.close();
 });
+
+function createThread(): number {
+  return Number(
+    mocks.db
+      .prepare(
+        `INSERT INTO threads
+           (pr_id, file_path, line, side, severity, status, first_seen_sha, last_seen_sha, stale, created_at)
+         VALUES (?, 'src/index.ts', 7, 'RIGHT', 'concern', 'open', 'head', 'head', 0, ?)`,
+      )
+      .run(mocks.pr.id, new Date().toISOString()).lastInsertRowid,
+  );
+}
 
 describe("startReview", () => {
   it("publishes committed results without waiting for worktree cleanup", async () => {
@@ -342,5 +373,146 @@ describe("startReview", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("durable thread actions", () => {
+  it("joins duplicate replies and atomically publishes comments with completion", async () => {
+    const threadId = createThread();
+    let releaseReply!: (value: { body: string; rawOutput: string; sessionIds: string[] }) => void;
+    mocks.reply.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          releaseReply = resolve;
+        }),
+    );
+
+    const first = startReply({
+      repo,
+      pr: mocks.pr,
+      threadId,
+      userMessage: "I patched this.",
+      providerId: "test",
+    });
+    const second = startReply({
+      repo,
+      pr: mocks.pr,
+      threadId,
+      userMessage: "I patched this.",
+      providerId: "test",
+    });
+
+    expect(first.created).toBe(true);
+    expect(second).toMatchObject({ actionId: first.actionId, created: false });
+    await vi.waitFor(() => expect(mocks.reply).toHaveBeenCalledOnce());
+    releaseReply({ body: "Confirmed.", rawOutput: "", sessionIds: [] });
+
+    await expect(first.completion).resolves.toMatchObject({ aiCommentId: expect.any(Number) });
+    await expect(second.completion).resolves.toMatchObject({ aiCommentId: expect.any(Number) });
+    expect(
+      mocks.db
+        .prepare("SELECT status, result FROM thread_actions WHERE id = ?")
+        .get(first.actionId),
+    ).toMatchObject({ status: "done", result: expect.stringContaining("aiCommentId") });
+    expect(
+      mocks.db
+        .prepare("SELECT author, body FROM comments WHERE thread_id = ? ORDER BY id")
+        .all(threadId),
+    ).toEqual([
+      { author: "user", body: "I patched this." },
+      { author: "ai", body: "Confirmed." },
+    ]);
+  });
+
+  it("fences a reclaimed reply without publishing partial comments", async () => {
+    const threadId = createThread();
+    let releaseReply!: (value: { body: string; rawOutput: string; sessionIds: string[] }) => void;
+    mocks.reply.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          releaseReply = resolve;
+        }),
+    );
+    const started = startReply({
+      repo,
+      pr: mocks.pr,
+      threadId,
+      userMessage: "Do not publish this twice.",
+      providerId: "test",
+    });
+    await vi.waitFor(() => expect(mocks.reply).toHaveBeenCalledOnce());
+    mocks.db
+      .prepare(
+        "UPDATE thread_actions SET status = 'error', finished_at = ?, error = 'lease reclaimed' WHERE id = ?",
+      )
+      .run(new Date().toISOString(), started.actionId);
+
+    releaseReply({ body: "Stale reply", rawOutput: "", sessionIds: [] });
+    await expect(started.completion).rejects.toThrow("lost its worker lease");
+    expect(
+      mocks.db.prepare("SELECT COUNT(*) AS count FROM comments WHERE thread_id = ?").get(threadId),
+    ).toEqual({ count: 0 });
+  });
+
+  it("commits revalidation, resolution, and durable completion together", async () => {
+    const threadId = createThread();
+    const started = startRevalidate({ repo, pr: mocks.pr, threadId, providerId: "test" });
+
+    await expect(started.completion).resolves.toMatchObject({
+      resolved: true,
+      commentId: expect.any(Number),
+    });
+    expect(
+      mocks.db.prepare("SELECT status FROM thread_actions WHERE id = ?").get(started.actionId),
+    ).toEqual({ status: "done" });
+    expect(mocks.db.prepare("SELECT status FROM threads WHERE id = ?").get(threadId)).toEqual({
+      status: "resolved",
+    });
+    expect(mocks.db.prepare("SELECT kind FROM comments WHERE thread_id = ?").get(threadId)).toEqual(
+      { kind: "revalidate-resolved" },
+    );
+  });
+
+  it("waits on persisted action completion after the owner promise is gone", async () => {
+    const threadId = createThread();
+    const actionId = Number(
+      mocks.db
+        .prepare(
+          `INSERT INTO thread_actions
+             (thread_id, pr_id, kind, input, provider, status, started_at, heartbeat_at)
+           VALUES (?, ?, 'revalidate', '', 'test', 'running', ?, ?)`,
+        )
+        .run(threadId, mocks.pr.id, new Date().toISOString(), new Date().toISOString())
+        .lastInsertRowid,
+    );
+    const waiting = waitForThreadAction(actionId, { pollIntervalMs: 5, timeoutMs: 1_000 });
+    setTimeout(() => {
+      mocks.db
+        .prepare(
+          "UPDATE thread_actions SET status = 'done', result = ?, finished_at = ? WHERE id = ?",
+        )
+        .run(JSON.stringify({ resolved: true, commentId: 1 }), new Date().toISOString(), actionId);
+    }, 10);
+
+    await expect(waiting).resolves.toMatchObject({ id: actionId, status: "done" });
+  });
+
+  it("turns an interrupted owner into a terminal action error", () => {
+    const threadId = createThread();
+    const old = new Date(Date.now() - 60_000).toISOString();
+    const actionId = Number(
+      mocks.db
+        .prepare(
+          `INSERT INTO thread_actions
+             (thread_id, pr_id, kind, input, provider, status, started_at, heartbeat_at, worker_token, worker_pid)
+           VALUES (?, ?, 'revalidate', '', 'test', 'running', ?, ?, 'dead-worker', ?)`,
+        )
+        .run(threadId, mocks.pr.id, old, old, 999_999_999).lastInsertRowid,
+    );
+
+    expect(reconcileInterruptedThreadActions()).toBe(1);
+    expect(
+      mocks.db.prepare("SELECT status, error FROM thread_actions WHERE id = ?").get(actionId),
+    ).toEqual({ status: "error", error: "Thread action interrupted before completion." });
   });
 });

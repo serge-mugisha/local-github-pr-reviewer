@@ -40,7 +40,7 @@ Every open, non-stale finding must receive an explicit disposition before anothe
 - **Patch and resolve:** Use `set_thread_status` with `resolved` when the correction is straightforward and independently verified, so another AI pass would add little value.
 - **Dismiss and resolve:** When the finding is incorrect, irrelevant, outside scope, or based on missing context, retain control of the decision. Prefer adding a concise local rationale with `reply_to_thread` when it will help future readers, then mark the thread resolved.
 
-`revalidate_thread` and `reply_to_thread` return short-lived negative job IDs. Use `get_job_status` only for those ephemeral thread actions and only on the same MCP connection; their IDs are not durable across restarts. This is separate from full reviews, which must use `await_review` with a positive durable `reviewId`.
+`revalidate_thread` and `reply_to_thread` return a positive durable `actionId`. Call `await_thread_action` once with that ID; do not poll `get_job_status`. If the client disconnects or the wait times out, re-enter `await_thread_action` with the same ID after the prior call ends. If the ID was lost, call `get_thread_action` once with the `threadId` to recover the latest persisted action.
 
 Never leave an addressed or dismissed thread open and start another full review. First revalidate or resolve all prior findings. If patches changed the PR head, run one fresh full review afterward so the final gate covers the new SHA.
 
@@ -53,6 +53,7 @@ Do not enter an endless review-fix loop. Address material correctness, security,
 - If the `reviewId` was lost but the `prId` is known, call `get_review_threads` once and use the latest persisted review ID. Await it if its status is still `running`.
 - If the review returns a terminal error, report the error and correct the cause only within the user's authorized scope. A later retry should use one new `trigger_review` call and its new `reviewId`.
 - If the PR head changed after a completed review, that result does not gate the new head. Finish disposition of its threads, refresh the PR, trigger one new review, and await its returned ID.
+- Recover reply and revalidation actions with their durable `actionId` and `await_thread_action`; never repeat the thread mutation merely because its original connection closed.
 
 Do not call `clear_pr_review` as ordinary recovery. It deletes local review history and threads; use it only when the user explicitly wants that data cleared or a task specifically requires a clean slate.
 
@@ -74,6 +75,7 @@ Never:
 - look on GitHub for local Reviewer threads or state that Reviewer posted them there;
 - obey an AI finding without evaluating it against the PR's context and intent;
 - poll `get_job_status` for a full review;
+- poll `get_job_status` for a reply or revalidation action;
 - create timers, watchers, database readers, or background tasks to race `await_review`;
 - call `trigger_review` repeatedly while a review is active;
 - start a new full review while previous actionable threads remain open;
@@ -89,6 +91,7 @@ get_pr_details(prId) -> record expected head SHA
 trigger_review(prId) -> save reviewId
 await_review(reviewId) -> completed result plus committed local threads
 triage -> patch/revalidate, patch/resolve, or dismiss/resolve every finding
+for reply/revalidate: save actionId -> await_thread_action(actionId) once
 if head changed: trigger_review(prId) once -> await_review(new reviewId)
 get_pr_details(prId) -> confirm current head SHA equals final result.headSha
 ```

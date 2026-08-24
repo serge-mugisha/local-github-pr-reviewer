@@ -38,8 +38,8 @@ import { catalogForClient } from "./reviewCatalog.js";
 import { buildReviewInstructions } from "./providers/prompt.js";
 import {
   runReview,
-  runReply,
-  runRevalidate,
+  startReply,
+  startRevalidate,
   setThreadStatus,
   reconcileInterruptedReviews,
   getLatestReviewForPR,
@@ -486,14 +486,14 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     sseInit(reply);
     sseSend(reply, "log", { message: `replying with ${providerId}…` });
     try {
-      const result = await runReply({
+      const result = await startReply({
         repo,
         pr,
         threadId,
         userMessage: body.body,
         providerId,
         onProgress: (e) => sseSend(reply, e.type, e),
-      });
+      }).completion;
       sseSend(reply, "done", result);
     } catch (e) {
       sseSend(reply, "error", { message: (e as Error).message });
@@ -517,13 +517,13 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     sseInit(reply);
     sseSend(reply, "log", { message: `revalidating with ${providerId}…` });
     try {
-      const result = await runRevalidate({
+      const result = await startRevalidate({
         repo,
         pr,
         threadId,
         providerId,
         onProgress: (e) => sseSend(reply, e.type, e),
-      });
+      }).completion;
       sseSend(reply, "done", result);
     } catch (e) {
       sseSend(reply, "error", { message: (e as Error).message });

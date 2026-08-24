@@ -72,15 +72,15 @@ export const antigravityProvider: Provider = {
     return { summary, comments, rawOutput: text, sessionIds } satisfies ReviewResult;
   },
 
-  async reply(ctx, onProgress) {
+  async reply(ctx, onProgress, signal) {
     const prompt = buildReplyPrompt(ctx);
-    const { text, sessionIds } = await runAntigravity(prompt, ctx.cwd, onProgress);
+    const { text, sessionIds } = await runAntigravity(prompt, ctx.cwd, onProgress, signal);
     return { body: text.trim(), rawOutput: text, sessionIds } satisfies ReplyResult;
   },
 
-  async revalidate(ctx, onProgress) {
+  async revalidate(ctx, onProgress, signal) {
     const prompt = buildRevalidatePrompt(ctx);
-    const { text, sessionIds } = await runAntigravity(prompt, ctx.cwd, onProgress);
+    const { text, sessionIds } = await runAntigravity(prompt, ctx.cwd, onProgress, signal);
     const parsed = parseRevalidateOutput(text);
     if (!parsed) {
       return {

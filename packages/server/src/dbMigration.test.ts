@@ -56,6 +56,21 @@ describe("PR schema migration", () => {
       ).toEqual(
         expect.arrayContaining(["worker_token", "worker_pid", "added_threads", "stale_marked"]),
       );
+      expect(
+        (migrated.pragma("table_info(thread_actions)") as { name: string }[]).map(
+          (column) => column.name,
+        ),
+      ).toEqual(
+        expect.arrayContaining([
+          "thread_id",
+          "pr_id",
+          "kind",
+          "status",
+          "heartbeat_at",
+          "worker_token",
+          "worker_pid",
+        ]),
+      );
       migrated.close();
     } finally {
       await rm(dir, { recursive: true, force: true });
@@ -173,5 +188,28 @@ describe("PR schema migration", () => {
       { id: 2, status: "running" },
     ]);
     expect(() => insert.run("later", "later")).toThrow(/UNIQUE constraint failed/);
+  });
+
+  it("enforces one active durable action per thread", () => {
+    db = new Database(":memory:");
+    migrateDatabase(db);
+    db.prepare("INSERT INTO repos (id, owner, name, local_path) VALUES (1, 'o', 'r', '/r')").run();
+    db.prepare(
+      `INSERT INTO prs
+       (id, repo_id, number, title, body, head_sha, base_sha, head_ref, base_ref, state, url, updated_at)
+       VALUES (1, 1, 1, 'PR', '', 'head', 'base', 'feature', 'main', 'OPEN', 'url', 'now')`,
+    ).run();
+    db.prepare(
+      `INSERT INTO threads
+       (id, pr_id, file_path, line, side, severity, status, first_seen_sha, last_seen_sha, stale, created_at)
+       VALUES (1, 1, 'src/a.ts', 1, 'RIGHT', 'concern', 'open', 'head', 'head', 0, 'now')`,
+    ).run();
+    const insert = db.prepare(
+      `INSERT INTO thread_actions
+       (thread_id, pr_id, kind, input, provider, status, started_at, heartbeat_at)
+       VALUES (1, 1, 'revalidate', '', 'codex', 'running', 'now', 'now')`,
+    );
+    insert.run();
+    expect(() => insert.run()).toThrow(/UNIQUE constraint failed/);
   });
 });

@@ -89,8 +89,16 @@ export interface Provider {
     onProgress?: ProviderProgress,
     signal?: AbortSignal,
   ): Promise<ReviewResult>;
-  reply(ctx: ReplyContext, onProgress?: ProviderProgress): Promise<ReplyResult>;
-  revalidate(ctx: RevalidateContext, onProgress?: ProviderProgress): Promise<RevalidateResult>;
+  reply(
+    ctx: ReplyContext,
+    onProgress?: ProviderProgress,
+    signal?: AbortSignal,
+  ): Promise<ReplyResult>;
+  revalidate(
+    ctx: RevalidateContext,
+    onProgress?: ProviderProgress,
+    signal?: AbortSignal,
+  ): Promise<RevalidateResult>;
   /** Delete the on-disk chat sessions this provider persisted for the given
    *  session ids (run in `cwd`). Returns how many sessions were removed. */
   deleteSessions?(sessionIds: string[], cwd: string): Promise<number>;

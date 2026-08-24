@@ -95,6 +95,23 @@ export function migrateDatabase(db: Database.Database): void {
       created_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS thread_actions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      thread_id INTEGER NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+      pr_id INTEGER NOT NULL REFERENCES prs(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL,
+      input TEXT NOT NULL DEFAULT '',
+      provider TEXT NOT NULL,
+      status TEXT NOT NULL,
+      result TEXT,
+      started_at TEXT NOT NULL,
+      heartbeat_at TEXT,
+      finished_at TEXT,
+      error TEXT,
+      worker_token TEXT,
+      worker_pid INTEGER
+    );
+
     CREATE TABLE IF NOT EXISTS skills (
       repo_id INTEGER PRIMARY KEY REFERENCES repos(id) ON DELETE CASCADE,
       body TEXT NOT NULL DEFAULT '',
@@ -157,6 +174,7 @@ export function migrateDatabase(db: Database.Database): void {
 
     CREATE INDEX IF NOT EXISTS idx_threads_pr ON threads(pr_id);
     CREATE INDEX IF NOT EXISTS idx_comments_thread ON comments(thread_id);
+    CREATE INDEX IF NOT EXISTS idx_thread_actions_thread ON thread_actions(thread_id);
     CREATE INDEX IF NOT EXISTS idx_prs_repo ON prs(repo_id);
     CREATE INDEX IF NOT EXISTS idx_ai_sessions_pr ON ai_sessions(pr_id);
   `);
@@ -179,6 +197,10 @@ export function migrateDatabase(db: Database.Database): void {
 
     CREATE UNIQUE INDEX IF NOT EXISTS idx_reviews_one_running_per_pr
       ON reviews(pr_id)
+      WHERE status = 'running';
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_thread_actions_one_running_per_thread
+      ON thread_actions(thread_id)
       WHERE status = 'running';
   `);
 
@@ -286,6 +308,22 @@ export interface CommentRow {
   head_sha: string;
   kind: string;
   created_at: string;
+}
+export interface ThreadActionRow {
+  id: number;
+  thread_id: number;
+  pr_id: number;
+  kind: "reply" | "revalidate";
+  input: string;
+  provider: string;
+  status: "running" | "done" | "error";
+  result: string | null;
+  started_at: string;
+  heartbeat_at: string | null;
+  finished_at: string | null;
+  error: string | null;
+  worker_token: string | null;
+  worker_pid: number | null;
 }
 export interface AiSessionRow {
   id: number;
