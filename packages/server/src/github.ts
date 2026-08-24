@@ -1,131 +1,48 @@
-import { spawn } from "node:child_process";
+import { spawnCli } from "./providers/spawn.js";
 
 /**
  * The ONLY module in this codebase that invokes the `gh` CLI.
  * Strictly read-only: no methods that mutate any GitHub state are exported,
- * and only safe subcommands are ever passed to spawn.
+ * and only safe subcommands are ever passed to the shared process-group runner.
  *
- * A unit test enforces that no other file calls spawn('gh', ...).
+ * A unit test enforces that no other file invokes the gh executable directly.
  */
 
 const ALLOWED_SUBCOMMANDS = new Set(["pr", "api", "auth"]);
 const ALLOWED_PR_VERBS = new Set(["list", "view", "diff"]);
 
-function abortReason(signal: AbortSignal, command: string): Error {
-  return signal.reason instanceof Error
-    ? signal.reason
-    : new Error(String(signal.reason ?? `${command} was cancelled`));
+function validateGhArgs(args: string[]): void {
+  if (args.length === 0 || !ALLOWED_SUBCOMMANDS.has(args[0]!)) {
+    throw new Error(`gh subcommand not allowed: ${args[0]}`);
+  }
+  if (args[0] === "pr" && args[1] && !ALLOWED_PR_VERBS.has(args[1])) {
+    throw new Error(`gh pr verb not allowed: ${args[1]}`);
+  }
+  if (args[0] === "api") {
+    const hasMethod = args.some(
+      (arg, index) =>
+        (arg === "-X" || arg === "--method") && args[index + 1] && args[index + 1] !== "GET",
+    );
+    if (hasMethod) throw new Error("gh api: only GET is allowed");
+  }
 }
 
-function ghJson<T>(args: string[], signal?: AbortSignal): Promise<T> {
-  return new Promise((resolveP, rejectP) => {
-    if (signal?.aborted) {
-      rejectP(abortReason(signal, "gh"));
-      return;
-    }
-    if (args.length === 0 || !ALLOWED_SUBCOMMANDS.has(args[0]!)) {
-      rejectP(new Error(`gh subcommand not allowed: ${args[0]}`));
-      return;
-    }
-    if (args[0] === "pr" && args[1] && !ALLOWED_PR_VERBS.has(args[1])) {
-      rejectP(new Error(`gh pr verb not allowed: ${args[1]}`));
-      return;
-    }
-    if (args[0] === "api") {
-      const hasMethod = args.some(
-        (a, i) => (a === "-X" || a === "--method") && args[i + 1] && args[i + 1] !== "GET",
-      );
-      if (hasMethod) {
-        rejectP(new Error("gh api: only GET is allowed"));
-        return;
-      }
-    }
-    const child = spawn("gh", args, { stdio: ["ignore", "pipe", "pipe"] });
-    let stdout = "";
-    let stderr = "";
-    let cancelled: Error | null = null;
-    let forceKillTimer: NodeJS.Timeout | undefined;
-    const onAbort = () => {
-      cancelled = abortReason(signal!, "gh");
-      child.kill("SIGTERM");
-      forceKillTimer = setTimeout(() => child.kill("SIGKILL"), 2_000);
-      forceKillTimer.unref?.();
-    };
-    signal?.addEventListener("abort", onAbort, { once: true });
-    child.stdout.on("data", (b) => (stdout += b.toString()));
-    child.stderr.on("data", (b) => (stderr += b.toString()));
-    child.on("close", (code) => {
-      signal?.removeEventListener("abort", onAbort);
-      if (forceKillTimer) clearTimeout(forceKillTimer);
-      if (cancelled) {
-        rejectP(cancelled);
-        return;
-      }
-      if (code !== 0) {
-        rejectP(new Error(`gh ${args.join(" ")} exited ${code}: ${stderr.trim()}`));
-        return;
-      }
-      try {
-        resolveP(stdout.trim() ? (JSON.parse(stdout) as T) : (undefined as unknown as T));
-      } catch (e) {
-        rejectP(new Error(`gh ${args.join(" ")} returned non-JSON: ${(e as Error).message}`));
-      }
-    });
-    child.on("error", (error) => {
-      signal?.removeEventListener("abort", onAbort);
-      if (forceKillTimer) clearTimeout(forceKillTimer);
-      rejectP(cancelled ?? error);
-    });
-  });
+async function ghText(args: string[], signal?: AbortSignal): Promise<string> {
+  validateGhArgs(args);
+  const result = await spawnCli({ cmd: "gh", args, cwd: process.cwd(), signal });
+  if (result.exitCode !== 0) {
+    throw new Error(`gh ${args.join(" ")} exited ${result.exitCode}: ${result.stderr.trim()}`);
+  }
+  return result.stdout;
 }
 
-function ghText(args: string[], signal?: AbortSignal): Promise<string> {
-  return new Promise((resolveP, rejectP) => {
-    if (signal?.aborted) {
-      rejectP(abortReason(signal, "gh"));
-      return;
-    }
-    if (args.length === 0 || !ALLOWED_SUBCOMMANDS.has(args[0]!)) {
-      rejectP(new Error(`gh subcommand not allowed: ${args[0]}`));
-      return;
-    }
-    if (args[0] === "pr" && args[1] && !ALLOWED_PR_VERBS.has(args[1])) {
-      rejectP(new Error(`gh pr verb not allowed: ${args[1]}`));
-      return;
-    }
-    const child = spawn("gh", args, { stdio: ["ignore", "pipe", "pipe"] });
-    let stdout = "";
-    let stderr = "";
-    let cancelled: Error | null = null;
-    let forceKillTimer: NodeJS.Timeout | undefined;
-    const onAbort = () => {
-      cancelled = abortReason(signal!, "gh");
-      child.kill("SIGTERM");
-      forceKillTimer = setTimeout(() => child.kill("SIGKILL"), 2_000);
-      forceKillTimer.unref?.();
-    };
-    signal?.addEventListener("abort", onAbort, { once: true });
-    child.stdout.on("data", (b) => (stdout += b.toString()));
-    child.stderr.on("data", (b) => (stderr += b.toString()));
-    child.on("close", (code) => {
-      signal?.removeEventListener("abort", onAbort);
-      if (forceKillTimer) clearTimeout(forceKillTimer);
-      if (cancelled) {
-        rejectP(cancelled);
-        return;
-      }
-      if (code !== 0) {
-        rejectP(new Error(`gh ${args.join(" ")} exited ${code}: ${stderr.trim()}`));
-        return;
-      }
-      resolveP(stdout);
-    });
-    child.on("error", (error) => {
-      signal?.removeEventListener("abort", onAbort);
-      if (forceKillTimer) clearTimeout(forceKillTimer);
-      rejectP(cancelled ?? error);
-    });
-  });
+async function ghJson<T>(args: string[], signal?: AbortSignal): Promise<T> {
+  const stdout = await ghText(args, signal);
+  try {
+    return stdout.trim() ? (JSON.parse(stdout) as T) : (undefined as unknown as T);
+  } catch (error) {
+    throw new Error(`gh ${args.join(" ")} returned non-JSON: ${(error as Error).message}`);
+  }
 }
 
 export interface GhPRSummary {

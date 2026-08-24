@@ -111,13 +111,14 @@ export interface WaitForReviewOptions {
 const REVIEW_WAIT_TIMEOUT_MS = 21 * 60 * 1_000;
 const REVIEW_POLL_INTERVAL_MS = 250;
 const localJoinedWaiters = new Set<AbortController>();
+const localReviewExecutions = new Set<AbortController>();
 
-export function abortLocalReviewWaiters(
+export function abortLocalReviewWork(
   reason: Error = new Error("Reviewer process is shutting down."),
 ): number {
-  const waiters = [...localJoinedWaiters];
-  for (const controller of waiters) controller.abort(reason);
-  return waiters.length;
+  const controllers = new Set([...localJoinedWaiters, ...localReviewExecutions]);
+  for (const controller of controllers) controller.abort(reason);
+  return controllers.size;
 }
 
 function waitForDelay(ms: number, signal?: AbortSignal): Promise<void> {
@@ -265,6 +266,7 @@ async function completeReview(
     WHERE id = ? AND worker_token = ? AND status = 'running'
   `);
   const executionController = new AbortController();
+  localReviewExecutions.add(executionController);
   const lifecycleError = new Error(
     `Review exceeded the ${Math.round(REVIEW_EXECUTION_TIMEOUT_MS / 60_000)}-minute total lifecycle limit.`,
   );
@@ -411,6 +413,7 @@ async function completeReview(
     reviewFinish.run("error", null, now(), (e as Error).message, null, null, reviewId, workerToken);
     throw e;
   } finally {
+    localReviewExecutions.delete(executionController);
     clearInterval(heartbeatTimer);
     clearTimeout(executionTimer);
   }

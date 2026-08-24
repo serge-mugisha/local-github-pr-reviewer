@@ -138,12 +138,11 @@ describe("preparePrHeadWorktree", () => {
     });
     const cleanup = wt.cleanup();
     await vi.advanceTimersByTimeAsync(30_000);
-    await cleanup;
-
     expect(cleanupChild.kill).toHaveBeenCalledWith("SIGTERM");
-    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("timed out after 30000ms"));
     await vi.advanceTimersByTimeAsync(2_000);
+    await cleanup;
     expect(cleanupChild.kill).toHaveBeenCalledWith("SIGKILL");
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("timed out after 30000ms"));
     cleanupChild.emit("close", null);
     errorSpy.mockRestore();
   });

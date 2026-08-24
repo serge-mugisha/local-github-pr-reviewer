@@ -109,12 +109,9 @@ export function spawnCli(opts: SpawnOptions): Promise<SpawnResult> {
       rejectP(error);
     };
 
-    const onAbort = () => {
+    const terminateAfterGrace = (error: Error) => {
       if (settled || cancellationError) return;
-      cancellationError =
-        opts.signal?.reason instanceof Error
-          ? opts.signal.reason
-          : new Error(String(opts.signal?.reason ?? `${opts.cmd} was cancelled`));
+      cancellationError = error;
       if (timer) clearTimeout(timer);
       killProcessTree(child, "SIGTERM");
       // Hold the provider promise and therefore its review lease through the
@@ -127,17 +124,18 @@ export function spawnCli(opts: SpawnOptions): Promise<SpawnResult> {
       }, 2_000);
       forceKillTimer.unref?.();
     };
+    const onAbort = () => {
+      terminateAfterGrace(
+        opts.signal?.reason instanceof Error
+          ? opts.signal.reason
+          : new Error(String(opts.signal?.reason ?? `${opts.cmd} was cancelled`)),
+      );
+    };
     opts.signal?.addEventListener("abort", onAbort, { once: true });
 
     if (opts.timeoutMs) {
       timer = setTimeout(() => {
-        killProcessTree(child, "SIGTERM");
-        fail(new CliTimeoutError(`${opts.cmd} timed out after ${opts.timeoutMs}ms`));
-        forceKillTimer = setTimeout(() => {
-          killProcessTree(child, "SIGKILL");
-          activeCliChildren.delete(child);
-        }, 2_000);
-        forceKillTimer.unref?.();
+        terminateAfterGrace(new CliTimeoutError(`${opts.cmd} timed out after ${opts.timeoutMs}ms`));
       }, opts.timeoutMs);
       timer.unref?.();
     }

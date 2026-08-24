@@ -52,7 +52,7 @@ describe("formatCliFailure", () => {
 });
 
 describe("spawnCli timeout", () => {
-  it("settles promptly even when a descendant inherits the output pipes", async () => {
+  it("settles after escalation even when a descendant inherits the output pipes", async () => {
     const childScript = [
       "const { spawn } = require('node:child_process')",
       "spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'inherit' })",
@@ -68,7 +68,8 @@ describe("spawnCli timeout", () => {
         timeoutMs: 50,
       }),
     ).rejects.toThrow(/timed out after 50ms/);
-    expect(Date.now() - startedAt).toBeLessThan(1_000);
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(1_900);
+    expect(Date.now() - startedAt).toBeLessThan(3_000);
   });
 
   it("terminates active provider process groups during server shutdown", async () => {
