@@ -3,7 +3,7 @@ import { Link, useParams } from "react-router-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { PatchDiff, type DiffLineAnnotation } from "@pierre/diffs/react";
-import { api, postSse, type PRDetail, type Thread } from "../api.js";
+import { api, errorHasPersistedInput, postSse, type PRDetail, type Thread } from "../api.js";
 import { Markdown } from "../components/Markdown.js";
 import { ReviewSettingsPanel } from "../components/ReviewSettingsPanel.js";
 import type { ReviewConfigFields } from "../components/ReviewConfigEditor.js";
@@ -1154,7 +1154,7 @@ function ThreadCard({
       onChange();
     } catch (error) {
       setActionError(error instanceof Error ? error.message : String(error));
-      setReply("");
+      if (errorHasPersistedInput(error)) setReply("");
       onChange();
     } finally {
       setStreaming(null);
@@ -1227,7 +1227,11 @@ function ThreadCard({
           </button>
         </div>
       )}
-      {actionError && <div className="small thread-action-error">{actionError}</div>}
+      {actionError && (
+        <div role="alert" className="small thread-action-error">
+          {actionError}
+        </div>
+      )}
     </div>
   );
 }

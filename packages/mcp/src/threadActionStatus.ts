@@ -14,6 +14,32 @@ export interface ThreadActionStatus {
   nextAction?: string;
 }
 
+export function selectThreadAction(
+  request: { actionId?: number; threadId?: number },
+  deps: {
+    getById(actionId: number): ThreadActionRow | undefined;
+    getLatestForThread(threadId: number): ThreadActionRow | undefined;
+  },
+): ThreadActionRow {
+  const action =
+    request.actionId === undefined
+      ? deps.getLatestForThread(request.threadId!)
+      : deps.getById(request.actionId);
+  if (!action) {
+    throw new Error(
+      request.actionId === undefined
+        ? `No thread action found for thread ${request.threadId}`
+        : `Thread action ${request.actionId} not found`,
+    );
+  }
+  if (request.threadId !== undefined && action.thread_id !== request.threadId) {
+    throw new Error(
+      `Thread action ${action.id} belongs to thread ${action.thread_id}, not ${request.threadId}`,
+    );
+  }
+  return action;
+}
+
 export function resolveThreadActionStatus(action: ThreadActionRow): ThreadActionStatus {
   const status: ThreadActionStatus = {
     actionId: action.id,

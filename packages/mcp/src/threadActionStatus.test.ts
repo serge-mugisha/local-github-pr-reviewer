@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ThreadActionRow } from "@reviewer/server/api";
-import { resolveThreadActionStatus } from "./threadActionStatus.js";
+import { resolveThreadActionStatus, selectThreadAction } from "./threadActionStatus.js";
 
 function action(status: ThreadActionRow["status"]): ThreadActionRow {
   return {
@@ -42,5 +42,26 @@ describe("resolveThreadActionStatus", () => {
       status: "running",
       nextAction: expect.stringContaining("await_thread_action"),
     });
+  });
+});
+
+describe("selectThreadAction", () => {
+  it("recovers the latest persisted action by thread id", () => {
+    const latest = action("done");
+    expect(
+      selectThreadAction(
+        { threadId: 9 },
+        { getById: () => undefined, getLatestForThread: () => latest },
+      ),
+    ).toBe(latest);
+  });
+
+  it("rejects an action id that belongs to another thread", () => {
+    expect(() =>
+      selectThreadAction(
+        { actionId: 17, threadId: 10 },
+        { getById: () => action("running"), getLatestForThread: () => undefined },
+      ),
+    ).toThrow("belongs to thread 9, not 10");
   });
 });

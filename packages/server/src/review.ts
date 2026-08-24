@@ -27,15 +27,12 @@ function now(): string {
   return new Date().toISOString();
 }
 
-const REVIEW_HEARTBEAT_MS = 5_000;
-const REVIEW_STALE_AFTER_MS = 30_000;
-const REVIEW_HARD_STALE_AFTER_MS = 20 * 60 * 1_000;
-const REVIEW_EXECUTION_TIMEOUT_MS = 20 * 60 * 1_000;
-const THREAD_ACTION_HEARTBEAT_MS = 5_000;
-const THREAD_ACTION_STALE_AFTER_MS = 30_000;
-const THREAD_ACTION_HARD_STALE_AFTER_MS = 20 * 60 * 1_000;
-const THREAD_ACTION_EXECUTION_TIMEOUT_MS = 20 * 60 * 1_000;
-const THREAD_ACTION_WAIT_TIMEOUT_MS = 21 * 60 * 1_000;
+const DURABLE_HEARTBEAT_MS = 5_000;
+const DURABLE_STALE_AFTER_MS = 30_000;
+const DURABLE_HARD_STALE_AFTER_MS = 20 * 60 * 1_000;
+const DURABLE_EXECUTION_TIMEOUT_MS = 20 * 60 * 1_000;
+const DURABLE_WAIT_TIMEOUT_MS = 21 * 60 * 1_000;
+const DURABLE_POLL_INTERVAL_MS = 250;
 
 function isProcessAlive(pid: number): boolean {
   try {
@@ -46,21 +43,29 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
-export function reconcileInterruptedReviews(db: Database.Database = getDb()): number {
+function reconcileInterruptedWork(
+  db: Database.Database,
+  table: "reviews" | "thread_actions",
+  interruptedMessage: string,
+): number {
   const finishedAt = now();
-  const staleBefore = new Date(Date.now() - REVIEW_STALE_AFTER_MS).toISOString();
-  const hardStaleBefore = new Date(Date.now() - REVIEW_HARD_STALE_AFTER_MS).toISOString();
+  const staleBefore = new Date(Date.now() - DURABLE_STALE_AFTER_MS).toISOString();
+  const hardStaleBefore = new Date(Date.now() - DURABLE_HARD_STALE_AFTER_MS).toISOString();
   const candidates = db
     .prepare(
       `SELECT id, worker_pid, heartbeat_at
-       FROM reviews
+       FROM ${table}
        WHERE status = 'running'
          AND (heartbeat_at IS NULL OR heartbeat_at < ?)`,
     )
-    .all(staleBefore) as Pick<ReviewRow, "id" | "worker_pid" | "heartbeat_at">[];
+    .all(staleBefore) as Array<{
+    id: number;
+    worker_pid: number | null;
+    heartbeat_at: string | null;
+  }>;
   const interrupt = db.prepare(
-    `UPDATE reviews
-     SET status = 'error', finished_at = ?, error = 'Review interrupted before completion.'
+    `UPDATE ${table}
+     SET status = 'error', finished_at = ?, error = ?
      WHERE id = ? AND status = 'running'`,
   );
   let changed = 0;
@@ -76,9 +81,13 @@ export function reconcileInterruptedReviews(db: Database.Database = getDb()): nu
     ) {
       continue;
     }
-    changed += interrupt.run(finishedAt, review.id).changes;
+    changed += interrupt.run(finishedAt, interruptedMessage, review.id).changes;
   }
   return changed;
+}
+
+export function reconcileInterruptedReviews(db: Database.Database = getDb()): number {
+  return reconcileInterruptedWork(db, "reviews", "Review interrupted before completion.");
 }
 
 function fingerprint(path: string | null, line: number | null, body: string): string {
@@ -163,8 +172,6 @@ export interface WaitForReviewOptions {
   onProgress?: (review: ReviewRow) => void;
 }
 
-const REVIEW_WAIT_TIMEOUT_MS = 21 * 60 * 1_000;
-const REVIEW_POLL_INTERVAL_MS = 250;
 const localJoinedWaiters = new Set<AbortController>();
 const localReviewExecutions = new Set<AbortController>();
 const localThreadActionWaiters = new Set<AbortController>();
@@ -202,6 +209,40 @@ function waitForDelay(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
+async function waitForDurableWork<T extends { id: number; status: string; error: string | null }>(
+  id: number,
+  options: {
+    signal?: AbortSignal;
+    timeoutMs?: number;
+    pollIntervalMs?: number;
+    onProgress?: (work: T) => void;
+  },
+  deps: {
+    label: string;
+    activeDescription: string;
+    reconcile(): void;
+    get(): T | undefined;
+  },
+): Promise<T> {
+  const started = Date.now();
+  const timeoutMs = options.timeoutMs ?? DURABLE_WAIT_TIMEOUT_MS;
+  const pollIntervalMs = options.pollIntervalMs ?? DURABLE_POLL_INTERVAL_MS;
+  for (;;) {
+    deps.reconcile();
+    const work = deps.get();
+    if (!work) throw new Error(`${deps.label} ${id} not found.`);
+    if (work.status === "done") return work;
+    if (work.status === "error") throw new Error(work.error ?? `${deps.label} ${id} failed.`);
+    if (Date.now() - started >= timeoutMs) {
+      throw new Error(
+        `Timed out waiting for ${deps.label.toLowerCase()} ${id} after ${Math.ceil(timeoutMs / 1_000)} seconds; ${deps.activeDescription} remains active and can be awaited again safely.`,
+      );
+    }
+    options.onProgress?.(work);
+    await waitForDelay(pollIntervalMs, options.signal);
+  }
+}
+
 /**
  * Wait on canonical persisted state rather than the provider promise owned by
  * one MCP process. This makes completion observable across reconnects and
@@ -211,24 +252,12 @@ export async function waitForReview(
   reviewId: number,
   options: WaitForReviewOptions = {},
 ): Promise<ReviewRow> {
-  const started = Date.now();
-  const timeoutMs = options.timeoutMs ?? REVIEW_WAIT_TIMEOUT_MS;
-  const pollIntervalMs = options.pollIntervalMs ?? REVIEW_POLL_INTERVAL_MS;
-
-  for (;;) {
-    reconcileInterruptedReviews();
-    const review = getReview(reviewId);
-    if (!review) throw new Error(`Review ${reviewId} not found.`);
-    if (review.status === "done") return review;
-    if (review.status === "error") throw new Error(review.error ?? `Review ${reviewId} failed.`);
-    if (Date.now() - started >= timeoutMs) {
-      throw new Error(
-        `Timed out waiting for review ${reviewId} after ${Math.ceil(timeoutMs / 1_000)} seconds; the review remains active and can be awaited again safely.`,
-      );
-    }
-    options.onProgress?.(review);
-    await waitForDelay(pollIntervalMs, options.signal);
-  }
+  return waitForDurableWork(reviewId, options, {
+    label: "Review",
+    activeDescription: "the review",
+    reconcile: reconcileInterruptedReviews,
+    get: () => getReview(reviewId),
+  });
 }
 
 function cleanupWorktreeInBackground(wt: PrWorktree): void {
@@ -302,7 +331,7 @@ async function completeReview(
   );
   const heartbeatTimer = setInterval(
     () => heartbeat.run(now(), reviewId, workerToken),
-    REVIEW_HEARTBEAT_MS,
+    DURABLE_HEARTBEAT_MS,
   );
 
   const reviewFinish = db.prepare(`
@@ -314,11 +343,11 @@ async function completeReview(
   const executionController = new AbortController();
   localReviewExecutions.add(executionController);
   const lifecycleError = new Error(
-    `Review exceeded the ${Math.round(REVIEW_EXECUTION_TIMEOUT_MS / 60_000)}-minute total lifecycle limit.`,
+    `Review exceeded the ${Math.round(DURABLE_EXECUTION_TIMEOUT_MS / 60_000)}-minute total lifecycle limit.`,
   );
   const executionTimer = setTimeout(
     () => executionController.abort(lifecycleError),
-    REVIEW_EXECUTION_TIMEOUT_MS,
+    DURABLE_EXECUTION_TIMEOUT_MS,
   );
   executionTimer.unref?.();
   const assertLease = () => {
@@ -481,35 +510,11 @@ export interface ThreadActionClaimArgs {
 }
 
 export function reconcileInterruptedThreadActions(db: Database.Database = getDb()): number {
-  const finishedAt = now();
-  const staleBefore = new Date(Date.now() - THREAD_ACTION_STALE_AFTER_MS).toISOString();
-  const hardStaleBefore = new Date(Date.now() - THREAD_ACTION_HARD_STALE_AFTER_MS).toISOString();
-  const candidates = db
-    .prepare(
-      `SELECT id, worker_pid, heartbeat_at
-       FROM thread_actions
-       WHERE status = 'running'
-         AND (heartbeat_at IS NULL OR heartbeat_at < ?)`,
-    )
-    .all(staleBefore) as Pick<ThreadActionRow, "id" | "worker_pid" | "heartbeat_at">[];
-  const interrupt = db.prepare(
-    `UPDATE thread_actions
-     SET status = 'error', finished_at = ?, error = 'Thread action interrupted before completion.'
-     WHERE id = ? AND status = 'running'`,
+  return reconcileInterruptedWork(
+    db,
+    "thread_actions",
+    "Thread action interrupted before completion.",
   );
-  let changed = 0;
-  for (const action of candidates) {
-    if (
-      action.worker_pid !== null &&
-      isProcessAlive(action.worker_pid) &&
-      action.heartbeat_at !== null &&
-      action.heartbeat_at >= hardStaleBefore
-    ) {
-      continue;
-    }
-    changed += interrupt.run(finishedAt, action.id).changes;
-  }
-  return changed;
 }
 
 export function claimThreadAction(
@@ -584,26 +589,12 @@ export async function waitForThreadAction(
   actionId: number,
   options: WaitForThreadActionOptions = {},
 ): Promise<ThreadActionRow> {
-  const started = Date.now();
-  const timeoutMs = options.timeoutMs ?? THREAD_ACTION_WAIT_TIMEOUT_MS;
-  const pollIntervalMs = options.pollIntervalMs ?? REVIEW_POLL_INTERVAL_MS;
-
-  for (;;) {
-    reconcileInterruptedThreadActions();
-    const action = getThreadAction(actionId);
-    if (!action) throw new Error(`Thread action ${actionId} not found.`);
-    if (action.status === "done") return action;
-    if (action.status === "error") {
-      throw new Error(action.error ?? `Thread action ${actionId} failed.`);
-    }
-    if (Date.now() - started >= timeoutMs) {
-      throw new Error(
-        `Timed out waiting for thread action ${actionId} after ${Math.ceil(timeoutMs / 1_000)} seconds; the action remains active and can be awaited again safely.`,
-      );
-    }
-    options.onProgress?.(action);
-    await waitForDelay(pollIntervalMs, options.signal);
-  }
+  return waitForDurableWork(actionId, options, {
+    label: "Thread action",
+    activeDescription: "the action",
+    reconcile: reconcileInterruptedThreadActions,
+    get: () => getThreadAction(actionId),
+  });
 }
 
 export interface StartedThreadAction<T> {
@@ -660,11 +651,11 @@ function startThreadAction<T>(args: {
   const executionController = new AbortController();
   localThreadActionExecutions.add(executionController);
   const lifecycleError = new Error(
-    `Thread action exceeded the ${Math.round(THREAD_ACTION_EXECUTION_TIMEOUT_MS / 60_000)}-minute total lifecycle limit.`,
+    `Thread action exceeded the ${Math.round(DURABLE_EXECUTION_TIMEOUT_MS / 60_000)}-minute total lifecycle limit.`,
   );
   const executionTimer = setTimeout(
     () => executionController.abort(lifecycleError),
-    THREAD_ACTION_EXECUTION_TIMEOUT_MS,
+    DURABLE_EXECUTION_TIMEOUT_MS,
   );
   executionTimer.unref?.();
   const heartbeat = db.prepare(
@@ -672,7 +663,7 @@ function startThreadAction<T>(args: {
   );
   const heartbeatTimer = setInterval(
     () => heartbeat.run(now(), claim.actionId, claim.workerToken),
-    THREAD_ACTION_HEARTBEAT_MS,
+    DURABLE_HEARTBEAT_MS,
   );
   const finish = db.prepare(
     `UPDATE thread_actions

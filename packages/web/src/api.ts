@@ -285,6 +285,19 @@ export interface SseEvent {
   data: unknown;
 }
 
+export function errorHasPersistedInput(error: unknown): boolean {
+  const data =
+    error instanceof Error && "data" in error
+      ? (error as Error & { data?: unknown }).data
+      : undefined;
+  return (
+    typeof data === "object" &&
+    data !== null &&
+    "inputPersisted" in data &&
+    data.inputPersisted === true
+  );
+}
+
 export async function postSse(
   url: string,
   body: unknown,
@@ -330,7 +343,9 @@ export async function postSse(
           typeof data === "object" && data !== null && "message" in data
             ? String(data.message)
             : String(data);
-        throw new Error(message);
+        const error = new Error(message) as Error & { data?: unknown };
+        error.data = data;
+        throw error;
       }
     }
   }

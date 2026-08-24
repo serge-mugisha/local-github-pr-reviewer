@@ -485,6 +485,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 
     sseInit(reply);
     sseSend(reply, "log", { message: `replying with ${providerId}…` });
+    let inputPersisted = false;
     try {
       const started = startReply({
         repo,
@@ -494,6 +495,9 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
         providerId,
         onProgress: (e) => sseSend(reply, e.type, e),
       });
+      // Creators persist in the claim transaction; joiners attach only to an
+      // action with this exact input, so both cases already have the message.
+      inputPersisted = true;
       if (!started.created) {
         sseSend(reply, "log", {
           message: `attached to active reply action ${started.actionId}; waiting for its result…`,
@@ -502,7 +506,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       const result = await started.completion;
       sseSend(reply, "done", result);
     } catch (e) {
-      sseSend(reply, "error", { message: (e as Error).message });
+      sseSend(reply, "error", { message: (e as Error).message, inputPersisted });
     } finally {
       sseEnd(reply);
     }

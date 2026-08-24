@@ -12,7 +12,7 @@ import { resolveJobStatus, type Job } from "./jobStatus.js";
 import { collectViewerPrs } from "./prDiscovery.js";
 import { handleAwaitReview } from "./awaitReview.js";
 import { handleAwaitThreadAction } from "./awaitThreadAction.js";
-import { resolveThreadActionStatus } from "./threadActionStatus.js";
+import { resolveThreadActionStatus, selectThreadAction } from "./threadActionStatus.js";
 
 // Review job IDs are their durable SQLite review IDs. The in-memory cache is
 // retained only for legacy get_job_status callers; canonical waits read SQLite.
@@ -923,23 +923,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
           })
           .parse(request.params.arguments);
         api.reconcileInterruptedThreadActions();
-        const action =
-          actionId === undefined
-            ? api.getLatestThreadActionForThread(threadId!)
-            : api.getThreadAction(actionId);
-        if (!action) {
-          throw new McpError(
-            ErrorCode.InvalidParams,
-            actionId === undefined
-              ? `No thread action found for thread ${threadId}`
-              : `Thread action ${actionId} not found`,
+        let action;
+        try {
+          action = selectThreadAction(
+            { actionId, threadId },
+            {
+              getById: api.getThreadAction,
+              getLatestForThread: api.getLatestThreadActionForThread,
+            },
           );
-        }
-        if (threadId !== undefined && action.thread_id !== threadId) {
-          throw new McpError(
-            ErrorCode.InvalidParams,
-            `Thread action ${action.id} belongs to thread ${action.thread_id}, not ${threadId}`,
-          );
+        } catch (error) {
+          throw new McpError(ErrorCode.InvalidParams, (error as Error).message);
         }
         return {
           content: [
