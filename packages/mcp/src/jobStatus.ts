@@ -10,6 +10,8 @@ export interface Job {
   prId?: number;
   startedAt: string;
   completedAt?: string;
+  statusMessage?: string;
+  nextAction?: string;
 }
 
 export interface JobStatusQuery {
@@ -51,6 +53,13 @@ export function reconcileReviewJob(job: Job, review: ReviewRow): Job {
     next.error = review.error ?? "Review failed.";
   } else {
     next.status = "running";
+    const elapsedSeconds = Math.max(
+      0,
+      Math.round((Date.now() - Date.parse(review.started_at)) / 1_000),
+    );
+    next.statusMessage = `Review ${review.id} is healthy and still running (${elapsedSeconds}s elapsed; last heartbeat ${review.heartbeat_at ?? "pending"}).`;
+    next.nextAction =
+      "Call await_review once with this reviewId. Do not poll get_job_status or trigger another review.";
   }
 
   return next;
@@ -58,7 +67,12 @@ export function reconcileReviewJob(job: Job, review: ReviewRow): Job {
 
 export function resolveJobStatus(query: JobStatusQuery, deps: JobStatusDeps): Job {
   const existingJob = query.jobId === undefined ? undefined : deps.getJob(query.jobId);
-  const reviewId = query.reviewId ?? existingJob?.reviewId;
+  // New review jobs use the persisted review id as their stable job id. The
+  // final fallback keeps jobId-only callers working across MCP restarts.
+  const reviewId =
+    query.reviewId ??
+    existingJob?.reviewId ??
+    (query.jobId !== undefined && existingJob === undefined ? query.jobId : undefined);
 
   if (reviewId !== undefined) {
     if (existingJob && existingJob.type !== "review") {

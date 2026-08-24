@@ -151,6 +151,27 @@ export function migrateDatabase(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_ai_sessions_pr ON ai_sessions(pr_id);
   `);
 
+  // Older releases allowed separate MCP/UI processes to start overlapping
+  // reviews for the same PR. Retire every older duplicate before installing
+  // the cross-process invariant that prevents that from happening again.
+  db.exec(`
+    UPDATE reviews
+    SET status = 'error',
+        finished_at = COALESCE(finished_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        error = COALESCE(error, 'Superseded duplicate review from an older Reviewer release.')
+    WHERE status = 'running'
+      AND id NOT IN (
+        SELECT MAX(id)
+        FROM reviews
+        WHERE status = 'running'
+        GROUP BY pr_id
+      );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_reviews_one_running_per_pr
+      ON reviews(pr_id)
+      WHERE status = 'running';
+  `);
+
   const reviewColumns = db.pragma("table_info(reviews)") as { name: string }[];
   if (!reviewColumns.some((column) => column.name === "heartbeat_at")) {
     db.exec("ALTER TABLE reviews ADD COLUMN heartbeat_at TEXT");

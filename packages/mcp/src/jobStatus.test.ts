@@ -109,6 +109,19 @@ describe("resolveJobStatus", () => {
     });
   });
 
+  it("treats an uncached positive job id as its durable review id", () => {
+    const resolved = resolveJobStatus(
+      { jobId: 41 },
+      deps({ getReview: (id) => (id === 41 ? review("done") : undefined) }),
+    );
+
+    expect(resolved).toMatchObject({
+      status: "completed",
+      reviewId: 41,
+      result: { reviewId: 41 },
+    });
+  });
+
   it("reconciles a running persisted row before returning it", () => {
     const reconcile = vi.fn();
     resolveJobStatus(

@@ -97,4 +97,30 @@ describe("PR schema migration", () => {
       created_at: "created",
     });
   });
+
+  it("retires legacy duplicate active reviews and enforces one active review per PR", () => {
+    db = new Database(":memory:");
+    migrateDatabase(db);
+    db.exec("DROP INDEX idx_reviews_one_running_per_pr");
+    db.prepare("INSERT INTO repos (id, owner, name, local_path) VALUES (1, 'o', 'r', '/r')").run();
+    db.prepare(
+      `INSERT INTO prs
+       (id, repo_id, number, title, body, head_sha, base_sha, head_ref, base_ref, state, url, updated_at)
+       VALUES (1, 1, 1, 'PR', '', 'head', 'base', 'feature', 'main', 'OPEN', 'url', 'now')`,
+    ).run();
+    const insert = db.prepare(
+      `INSERT INTO reviews (pr_id, head_sha, provider, status, started_at, heartbeat_at)
+       VALUES (1, 'head', 'codex', 'running', ?, ?)`,
+    );
+    insert.run("2026-08-24T00:00:00.000Z", "2026-08-24T00:00:01.000Z");
+    insert.run("2026-08-24T00:01:00.000Z", "2026-08-24T00:01:01.000Z");
+
+    migrateDatabase(db);
+
+    expect(db.prepare("SELECT id, status FROM reviews ORDER BY id").all()).toEqual([
+      { id: 1, status: "error" },
+      { id: 2, status: "running" },
+    ]);
+    expect(() => insert.run("later", "later")).toThrow(/UNIQUE constraint failed/);
+  });
 });

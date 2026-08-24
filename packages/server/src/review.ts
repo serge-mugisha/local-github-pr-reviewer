@@ -52,17 +52,78 @@ export interface RunReviewArgs {
   pr: PrRow;
   providerId: string;
   onProgress?: ProviderProgress;
+  /** Runs only for the caller that wins the cross-process review claim. */
+  beforeCreate?: () => void;
 }
 
 export interface RunReviewResult {
   reviewId: number;
-  addedThreads: number;
-  staleMarked: number;
+  addedThreads?: number;
+  staleMarked?: number;
 }
 
 export interface StartedReview {
   reviewId: number;
+  created: boolean;
   completion: Promise<RunReviewResult>;
+}
+
+export interface WaitForReviewOptions {
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  pollIntervalMs?: number;
+  onProgress?: (review: ReviewRow) => void;
+}
+
+const REVIEW_WAIT_TIMEOUT_MS = 16 * 60 * 1_000;
+const REVIEW_POLL_INTERVAL_MS = 250;
+
+function waitForDelay(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason ?? new Error("Review wait cancelled."));
+      return;
+    }
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal?.reason ?? new Error("Review wait cancelled."));
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    timer.unref?.();
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+/**
+ * Wait on canonical persisted state rather than the provider promise owned by
+ * one MCP process. This makes completion observable across reconnects and
+ * returns as soon as the transaction publishing review results commits.
+ */
+export async function waitForReview(
+  reviewId: number,
+  options: WaitForReviewOptions = {},
+): Promise<ReviewRow> {
+  const started = Date.now();
+  const timeoutMs = options.timeoutMs ?? REVIEW_WAIT_TIMEOUT_MS;
+  const pollIntervalMs = options.pollIntervalMs ?? REVIEW_POLL_INTERVAL_MS;
+
+  for (;;) {
+    reconcileInterruptedReviews();
+    const review = getReview(reviewId);
+    if (!review) throw new Error(`Review ${reviewId} not found.`);
+    if (review.status === "done") return review;
+    if (review.status === "error") throw new Error(review.error ?? `Review ${reviewId} failed.`);
+    if (Date.now() - started >= timeoutMs) {
+      throw new Error(
+        `Timed out waiting for review ${reviewId} after ${Math.ceil(timeoutMs / 1_000)} seconds; the review remains active and can be awaited again safely.`,
+      );
+    }
+    options.onProgress?.(review);
+    await waitForDelay(pollIntervalMs, options.signal);
+  }
 }
 
 function cleanupWorktreeInBackground(wt: PrWorktree): void {
@@ -74,22 +135,47 @@ function cleanupWorktreeInBackground(wt: PrWorktree): void {
 }
 
 export function startReview(args: RunReviewArgs): StartedReview {
-  const { repo, pr, providerId, onProgress } = args;
+  const { repo, pr, providerId, onProgress, beforeCreate } = args;
   const provider = getProvider(providerId);
   const db = getDb();
 
-  const reviewInsert = db.prepare(`
-    INSERT INTO reviews (pr_id, head_sha, provider, status, started_at, heartbeat_at)
-    VALUES (?, ?, ?, 'running', ?, ?)
-  `);
-  const startedAt = now();
-  const reviewId = Number(
-    reviewInsert.run(pr.id, pr.head_sha, providerId, startedAt, startedAt).lastInsertRowid,
-  );
+  // A SQLite write transaction is the cross-process lock. Every UI and MCP
+  // server shares this database, so only the winner inserts and runs a
+  // provider; all concurrent callers join the same durable review.
+  const claim = db
+    .transaction((): { reviewId: number; created: boolean } => {
+      reconcileInterruptedReviews();
+      const active = db
+        .prepare(
+          "SELECT id FROM reviews WHERE pr_id = ? AND status = 'running' ORDER BY id DESC LIMIT 1",
+        )
+        .get(pr.id) as { id: number } | undefined;
+      if (active) return { reviewId: active.id, created: false };
+
+      beforeCreate?.();
+      const startedAt = now();
+      const reviewId = Number(
+        db
+          .prepare(
+            `INSERT INTO reviews (pr_id, head_sha, provider, status, started_at, heartbeat_at)
+           VALUES (?, ?, ?, 'running', ?, ?)`,
+          )
+          .run(pr.id, pr.head_sha, providerId, startedAt, startedAt).lastInsertRowid,
+      );
+      return { reviewId, created: true };
+    })
+    .immediate();
+
+  if (!claim.created) {
+    return {
+      ...claim,
+      completion: waitForReview(claim.reviewId).then(() => ({ reviewId: claim.reviewId })),
+    };
+  }
 
   return {
-    reviewId,
-    completion: completeReview({ repo, pr, providerId, onProgress }, reviewId, provider, db),
+    ...claim,
+    completion: completeReview({ repo, pr, providerId, onProgress }, claim.reviewId, provider, db),
   };
 }
 
@@ -208,10 +294,12 @@ async function completeReview(
           insertComment.run(tid, c.body, refreshed.head_sha, now());
           added++;
         }
+        // Publish the terminal state in the same commit as its threads. A
+        // waiter can therefore never observe "done" without all findings or
+        // findings that belong to a still-running review.
+        reviewFinish.run("done", result.summary, now(), null, reviewId);
       });
       tx();
-
-      reviewFinish.run("done", result.summary, now(), null, reviewId);
       return { reviewId, addedThreads: added, staleMarked };
     } finally {
       cleanupWorktreeInBackground(wt);

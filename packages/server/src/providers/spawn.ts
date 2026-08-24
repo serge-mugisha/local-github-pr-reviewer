@@ -21,23 +21,79 @@ export interface SpawnOptions {
   timeoutMs?: number;
 }
 
+export class CliTimeoutError extends Error {
+  override name = "CliTimeoutError";
+}
+
+function killProcessTree(child: ReturnType<typeof spawn>, signal: NodeJS.Signals): void {
+  if (child.pid === undefined) return;
+  try {
+    // Providers can spawn helpers that inherit stdout/stderr. Killing only the
+    // direct child can leave those pipes open forever, so use a process group
+    // on POSIX and fall back to the direct child on Windows.
+    if (process.platform === "win32") child.kill(signal);
+    else process.kill(-child.pid, signal);
+  } catch {
+    try {
+      child.kill(signal);
+    } catch {
+      // The process already exited.
+    }
+  }
+}
+
+const activeCliChildren = new Set<ReturnType<typeof spawn>>();
+process.once("exit", () => {
+  for (const child of activeCliChildren) killProcessTree(child, "SIGTERM");
+});
+
 export function spawnCli(opts: SpawnOptions): Promise<SpawnResult> {
   return new Promise((resolveP, rejectP) => {
     const child = spawn(opts.cmd, opts.args, {
       cwd: opts.cwd,
       env: { ...process.env, ...opts.env },
       stdio: ["pipe", "pipe", "pipe"],
+      detached: process.platform !== "win32",
     });
+    activeCliChildren.add(child);
     let stdout = "";
     let stderr = "";
     let combinedOutput = "";
     let timer: NodeJS.Timeout | null = null;
+    let forceKillTimer: NodeJS.Timeout | null = null;
+    let settled = false;
+
+    const clearTimers = () => {
+      if (timer) clearTimeout(timer);
+      if (forceKillTimer) clearTimeout(forceKillTimer);
+    };
+
+    const finish = (result: SpawnResult) => {
+      if (settled) return;
+      settled = true;
+      activeCliChildren.delete(child);
+      clearTimers();
+      resolveP(result);
+    };
+
+    const fail = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      // Keep timed-out children registered until their close event so a
+      // parent exit during the SIGTERM grace period still kills the group.
+      if (error.name !== "CliTimeoutError") activeCliChildren.delete(child);
+      clearTimers();
+      rejectP(error);
+    };
 
     if (opts.timeoutMs) {
       timer = setTimeout(() => {
-        child.kill("SIGTERM");
-        setTimeout(() => child.kill("SIGKILL"), 2000);
+        killProcessTree(child, "SIGTERM");
+        fail(new CliTimeoutError(`${opts.cmd} timed out after ${opts.timeoutMs}ms`));
+        forceKillTimer = setTimeout(() => killProcessTree(child, "SIGKILL"), 2_000);
+        forceKillTimer.unref?.();
       }, opts.timeoutMs);
+      timer.unref?.();
     }
 
     child.stdout.on("data", (b) => {
@@ -53,12 +109,12 @@ export function spawnCli(opts: SpawnOptions): Promise<SpawnResult> {
       opts.onProgress?.({ type: "stderr", data: s });
     });
     child.on("close", (code) => {
-      if (timer) clearTimeout(timer);
-      resolveP({ stdout, stderr, combinedOutput, exitCode: code ?? -1 });
+      activeCliChildren.delete(child);
+      if (forceKillTimer) clearTimeout(forceKillTimer);
+      finish({ stdout, stderr, combinedOutput, exitCode: code ?? -1 });
     });
     child.on("error", (e) => {
-      if (timer) clearTimeout(timer);
-      rejectP(e);
+      fail(e);
     });
 
     if (opts.stdin !== undefined) {

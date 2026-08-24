@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatCliFailure, type SpawnResult } from "./spawn.js";
+import { formatCliFailure, spawnCli, type SpawnResult } from "./spawn.js";
 
 function result(partial: Partial<SpawnResult>): SpawnResult {
   return {
@@ -43,5 +43,26 @@ describe("formatCliFailure", () => {
     expect(message).toContain("characters omitted");
     expect(message).toContain("important end");
     expect(message.length).toBeLessThan(66_000);
+  });
+});
+
+describe("spawnCli timeout", () => {
+  it("settles promptly even when a descendant inherits the output pipes", async () => {
+    const childScript = [
+      "const { spawn } = require('node:child_process')",
+      "spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'inherit' })",
+      "setInterval(() => {}, 1000)",
+    ].join(";");
+    const startedAt = Date.now();
+
+    await expect(
+      spawnCli({
+        cmd: process.execPath,
+        args: ["-e", childScript],
+        cwd: process.cwd(),
+        timeoutMs: 50,
+      }),
+    ).rejects.toThrow(/timed out after 50ms/);
+    expect(Date.now() - startedAt).toBeLessThan(1_000);
   });
 });
