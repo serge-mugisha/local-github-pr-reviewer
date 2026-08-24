@@ -110,6 +110,15 @@ export interface WaitForReviewOptions {
 
 const REVIEW_WAIT_TIMEOUT_MS = 21 * 60 * 1_000;
 const REVIEW_POLL_INTERVAL_MS = 250;
+const localJoinedWaiters = new Set<AbortController>();
+
+export function abortLocalReviewWaiters(
+  reason: Error = new Error("Reviewer process is shutting down."),
+): number {
+  const waiters = [...localJoinedWaiters];
+  for (const controller of waiters) controller.abort(reason);
+  return waiters.length;
+}
 
 function waitForDelay(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -203,13 +212,17 @@ export function startReview(args: RunReviewArgs): StartedReview {
     .immediate();
 
   if (!claim.created) {
+    const waitController = new AbortController();
+    localJoinedWaiters.add(waitController);
     return {
       ...claim,
-      completion: waitForReview(claim.reviewId).then((review) => ({
-        reviewId: claim.reviewId,
-        addedThreads: review.added_threads ?? 0,
-        staleMarked: review.stale_marked ?? 0,
-      })),
+      completion: waitForReview(claim.reviewId, { signal: waitController.signal })
+        .then((review) => ({
+          reviewId: claim.reviewId,
+          addedThreads: review.added_threads ?? 0,
+          staleMarked: review.stale_marked ?? 0,
+        }))
+        .finally(() => localJoinedWaiters.delete(waitController)),
     };
   }
 

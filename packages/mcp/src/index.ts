@@ -903,6 +903,7 @@ async function main() {
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT"] as const) {
     const shutdown = () => {
       process.removeListener(signal, shutdown);
+      api.abortLocalReviewWaiters();
       void api.shutdownActiveCliChildren().then(() => process.kill(process.pid, signal));
     };
     process.once(signal, shutdown);

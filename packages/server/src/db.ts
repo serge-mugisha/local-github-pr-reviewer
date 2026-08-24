@@ -11,13 +11,19 @@ export function getDb(): Database.Database {
   const db = new Database(resolve(dataDir(), "reviewer.db"));
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
+  db.pragma("busy_timeout = 5000");
   migrateDatabase(db);
   dbInstance = db;
   return db;
 }
 
 export function migrateDatabase(db: Database.Database): void {
-  db.exec(`
+  // UI and MCP processes can open the same database simultaneously after an
+  // upgrade. An IMMEDIATE transaction serializes the check-then-ALTER steps,
+  // so every later process re-reads the schema only after the winner commits.
+  db.pragma("busy_timeout = 5000");
+  db.transaction(() => {
+    db.exec(`
     CREATE TABLE IF NOT EXISTS repos (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       owner TEXT NOT NULL,
@@ -155,10 +161,10 @@ export function migrateDatabase(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_ai_sessions_pr ON ai_sessions(pr_id);
   `);
 
-  // Older releases allowed separate MCP/UI processes to start overlapping
-  // reviews for the same PR. Retire every older duplicate before installing
-  // the cross-process invariant that prevents that from happening again.
-  db.exec(`
+    // Older releases allowed separate MCP/UI processes to start overlapping
+    // reviews for the same PR. Retire every older duplicate before installing
+    // the cross-process invariant that prevents that from happening again.
+    db.exec(`
     UPDATE reviews
     SET status = 'error',
         finished_at = COALESCE(finished_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
@@ -176,42 +182,43 @@ export function migrateDatabase(db: Database.Database): void {
       WHERE status = 'running';
   `);
 
-  const reviewColumns = db.pragma("table_info(reviews)") as { name: string }[];
-  if (!reviewColumns.some((column) => column.name === "heartbeat_at")) {
-    db.exec("ALTER TABLE reviews ADD COLUMN heartbeat_at TEXT");
-  }
-  if (!reviewColumns.some((column) => column.name === "worker_token")) {
-    db.exec("ALTER TABLE reviews ADD COLUMN worker_token TEXT");
-  }
-  if (!reviewColumns.some((column) => column.name === "worker_pid")) {
-    db.exec("ALTER TABLE reviews ADD COLUMN worker_pid INTEGER");
-  }
-  if (!reviewColumns.some((column) => column.name === "added_threads")) {
-    db.exec("ALTER TABLE reviews ADD COLUMN added_threads INTEGER");
-  }
-  if (!reviewColumns.some((column) => column.name === "stale_marked")) {
-    db.exec("ALTER TABLE reviews ADD COLUMN stale_marked INTEGER");
-  }
+    const reviewColumns = db.pragma("table_info(reviews)") as { name: string }[];
+    if (!reviewColumns.some((column) => column.name === "heartbeat_at")) {
+      db.exec("ALTER TABLE reviews ADD COLUMN heartbeat_at TEXT");
+    }
+    if (!reviewColumns.some((column) => column.name === "worker_token")) {
+      db.exec("ALTER TABLE reviews ADD COLUMN worker_token TEXT");
+    }
+    if (!reviewColumns.some((column) => column.name === "worker_pid")) {
+      db.exec("ALTER TABLE reviews ADD COLUMN worker_pid INTEGER");
+    }
+    if (!reviewColumns.some((column) => column.name === "added_threads")) {
+      db.exec("ALTER TABLE reviews ADD COLUMN added_threads INTEGER");
+    }
+    if (!reviewColumns.some((column) => column.name === "stale_marked")) {
+      db.exec("ALTER TABLE reviews ADD COLUMN stale_marked INTEGER");
+    }
 
-  const repoColumns = db.pragma("table_info(repos)") as { name: string }[];
-  if (!repoColumns.some((column) => column.name === "reviewer_provider")) {
-    db.exec("ALTER TABLE repos ADD COLUMN reviewer_provider TEXT");
-  }
+    const repoColumns = db.pragma("table_info(repos)") as { name: string }[];
+    if (!repoColumns.some((column) => column.name === "reviewer_provider")) {
+      db.exec("ALTER TABLE repos ADD COLUMN reviewer_provider TEXT");
+    }
 
-  const prColumns = db.pragma("table_info(prs)") as { name: string }[];
-  if (!prColumns.some((column) => column.name === "reviewer_provider")) {
-    db.exec("ALTER TABLE prs ADD COLUMN reviewer_provider TEXT");
-  }
-  if (!prColumns.some((column) => column.name === "assignees")) {
-    db.exec("ALTER TABLE prs ADD COLUMN assignees TEXT NOT NULL DEFAULT '[]'");
-  }
-  if (!prColumns.some((column) => column.name === "review_requests")) {
-    db.exec("ALTER TABLE prs ADD COLUMN review_requests TEXT NOT NULL DEFAULT '[]'");
-  }
-  if (!prColumns.some((column) => column.name === "created_at")) {
-    db.exec("ALTER TABLE prs ADD COLUMN created_at TEXT NOT NULL DEFAULT ''");
-    db.exec("UPDATE prs SET created_at = updated_at WHERE created_at = ''");
-  }
+    const prColumns = db.pragma("table_info(prs)") as { name: string }[];
+    if (!prColumns.some((column) => column.name === "reviewer_provider")) {
+      db.exec("ALTER TABLE prs ADD COLUMN reviewer_provider TEXT");
+    }
+    if (!prColumns.some((column) => column.name === "assignees")) {
+      db.exec("ALTER TABLE prs ADD COLUMN assignees TEXT NOT NULL DEFAULT '[]'");
+    }
+    if (!prColumns.some((column) => column.name === "review_requests")) {
+      db.exec("ALTER TABLE prs ADD COLUMN review_requests TEXT NOT NULL DEFAULT '[]'");
+    }
+    if (!prColumns.some((column) => column.name === "created_at")) {
+      db.exec("ALTER TABLE prs ADD COLUMN created_at TEXT NOT NULL DEFAULT ''");
+      db.exec("UPDATE prs SET created_at = updated_at WHERE created_at = ''");
+    }
+  }).immediate();
 }
 
 // --- Row types ---

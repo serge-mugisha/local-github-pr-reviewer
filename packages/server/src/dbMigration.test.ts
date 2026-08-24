@@ -1,5 +1,9 @@
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
+import { Worker } from "node:worker_threads";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { migrateDatabase } from "./db.js";
 import { OPEN_PR_UPSERT_SQL } from "./prs.js";
 
@@ -11,6 +15,53 @@ afterEach(() => {
 });
 
 describe("PR schema migration", () => {
+  it("serializes simultaneous migrations from separate processes", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "reviewer-migration-"));
+    const dbPath = join(dir, "reviewer.db");
+    const barrier = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
+    const migrationSource = migrateDatabase.toString();
+    const workerSource = `
+      const { parentPort, workerData } = require("node:worker_threads");
+      const Database = require("better-sqlite3");
+      (async () => {
+        const migrateDatabase = eval("(" + workerData.migrationSource + ")");
+        const database = new Database(workerData.dbPath);
+        const barrier = new Int32Array(workerData.barrier);
+        Atomics.add(barrier, 0, 1);
+        Atomics.notify(barrier, 0);
+        while (Atomics.load(barrier, 0) < 2) Atomics.wait(barrier, 0, 1, 5_000);
+        migrateDatabase(database);
+        database.close();
+        parentPort.postMessage({ ok: true });
+      })().catch((error) => parentPort.postMessage({ ok: false, error: error.stack }));
+    `;
+    const runWorker = () =>
+      new Promise<void>((resolveP, rejectP) => {
+        const worker = new Worker(workerSource, {
+          eval: true,
+          workerData: { dbPath, barrier, migrationSource },
+        });
+        worker.once("message", (message: { ok: boolean; error?: string }) => {
+          if (message.ok) resolveP();
+          else rejectP(new Error(message.error));
+        });
+        worker.once("error", rejectP);
+      });
+
+    try {
+      await Promise.all([runWorker(), runWorker()]);
+      const migrated = new Database(dbPath);
+      expect(
+        (migrated.pragma("table_info(reviews)") as { name: string }[]).map((column) => column.name),
+      ).toEqual(
+        expect.arrayContaining(["worker_token", "worker_pid", "added_threads", "stale_marked"]),
+      );
+      migrated.close();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("adds current columns and preserves a PR override through the real refresh upsert", () => {
     db = new Database(":memory:");
     db.exec(`

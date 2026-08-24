@@ -1,7 +1,12 @@
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { migrateDatabase, type PrRow, type RepoRow } from "./db.js";
-import { reconcileInterruptedReviews, startReview, waitForReview } from "./review.js";
+import {
+  abortLocalReviewWaiters,
+  reconcileInterruptedReviews,
+  startReview,
+  waitForReview,
+} from "./review.js";
 
 const mocks = vi.hoisted(() => ({
   db: undefined as unknown as Database.Database,
@@ -154,6 +159,35 @@ describe("startReview", () => {
       staleMarked: 0,
     });
     expect(mocks.review).toHaveBeenCalledOnce();
+  });
+
+  it("aborts only this process's joined waiters during shutdown", async () => {
+    const reviewId = Number(
+      mocks.db
+        .prepare(
+          `INSERT INTO reviews
+             (pr_id, head_sha, provider, status, started_at, heartbeat_at, worker_token, worker_pid)
+           VALUES (?, ?, ?, 'running', ?, ?, ?, ?)`,
+        )
+        .run(
+          mocks.pr.id,
+          mocks.pr.head_sha,
+          "external",
+          new Date().toISOString(),
+          new Date().toISOString(),
+          "external-worker",
+          process.pid,
+        ).lastInsertRowid,
+    );
+    const joined = startReview({ repo, pr: mocks.pr, providerId: "test" });
+    expect(joined).toMatchObject({ reviewId, created: false });
+
+    expect(abortLocalReviewWaiters()).toBe(1);
+    await expect(joined.completion).rejects.toThrow("Reviewer process is shutting down.");
+    expect(mocks.db.prepare("SELECT status FROM reviews WHERE id = ?").get(reviewId)).toEqual({
+      status: "running",
+    });
+    expect(mocks.review).not.toHaveBeenCalled();
   });
 
   it("fences a stale worker from publishing after its lease is reclaimed", async () => {
