@@ -453,7 +453,9 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       sseSend(reply, "log", {
         message: `${queued.created ? "queued" : "joined"} durable review task ${queued.workId}`,
       });
-      const work = await waitForWorkItem(queued.workId);
+      const work = await waitForWorkItem(queued.workId, {
+        onEvent: (event) => sseSend(reply, event.type, event),
+      });
       const result = JSON.parse(work.result ?? "null");
       sseSend(reply, "done", result);
     } catch (e) {
@@ -487,7 +489,9 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       sseSend(reply, "log", {
         message: `${queued.created ? "queued" : "joined"} durable reply task ${queued.workId}`,
       });
-      const work = await waitForWorkItem(queued.workId);
+      const work = await waitForWorkItem(queued.workId, {
+        onEvent: (event) => sseSend(reply, event.type, event),
+      });
       const result = JSON.parse(work.result ?? "null");
       sseSend(reply, "done", result);
     } catch (e) {
@@ -516,7 +520,9 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       sseSend(reply, "log", {
         message: `${queued.created ? "queued" : "joined"} durable revalidation task ${queued.workId}`,
       });
-      const work = await waitForWorkItem(queued.workId);
+      const work = await waitForWorkItem(queued.workId, {
+        onEvent: (event) => sseSend(reply, event.type, event),
+      });
       const result = JSON.parse(work.result ?? "null");
       sseSend(reply, "done", result);
     } catch (e) {

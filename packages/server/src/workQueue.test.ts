@@ -2,12 +2,15 @@ import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { migrateDatabase } from "./db.js";
 import {
+  appendWorkEvent,
   claimWorkItem,
   completeWorkItem,
   enqueueWork,
   ensureWorkItemRunning,
   getWorkItem,
+  listWorkEvents,
   reconcileInterruptedWorkItems,
+  resolveWorkerLaunch,
 } from "./workQueue.js";
 
 const mocks = vi.hoisted(() => ({
@@ -63,6 +66,27 @@ describe("durable Reviewer work queue", () => {
       attempt_count: 0,
       launch_count: 1,
     });
+  });
+
+  it("uses tsx for the source worker during npm run dev", () => {
+    const launch = resolveWorkerLaunch("dev-work", (path) => path.endsWith("worker.ts"));
+    expect(launch.command).toBe(process.execPath);
+    expect(launch.args).toEqual([
+      expect.stringContaining("tsx/dist/cli.mjs"),
+      expect.stringMatching(/worker\.ts$/),
+      "dev-work",
+    ]);
+  });
+
+  it("persists provider progress for reconnecting UI consumers", () => {
+    const queued = enqueueWork({ kind: "review", prId: 8 });
+    appendWorkEvent(queued.workId, { type: "stderr", data: "reviewing file.ts" });
+    expect(listWorkEvents(queued.workId)).toEqual([
+      expect.objectContaining({
+        work_id: queued.workId,
+        event: JSON.stringify({ type: "stderr", data: "reviewing file.ts" }),
+      }),
+    ]);
   });
 
   it("allows only one process to claim and publish a queued item", () => {

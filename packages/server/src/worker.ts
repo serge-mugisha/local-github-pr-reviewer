@@ -3,6 +3,7 @@ import { getPRById } from "./prs.js";
 import { resolveReviewerProvider } from "./reviewerProvider.js";
 import { startReply, startReview, startRevalidate } from "./review.js";
 import {
+  appendWorkEvent,
   claimWorkItem,
   completeWorkItem,
   failWorkItem,
@@ -18,10 +19,12 @@ function requireContext(prId: number) {
   return { pr, repo, providerId: resolveReviewerProvider(repo, pr).provider };
 }
 
-async function execute(payload: WorkPayload): Promise<unknown> {
+async function execute(workId: string, payload: WorkPayload): Promise<unknown> {
+  const onProgress = (event: Parameters<typeof appendWorkEvent>[1]) =>
+    appendWorkEvent(workId, event);
   if (payload.kind === "review") {
     const context = requireContext(payload.prId);
-    return startReview(context).completion;
+    return startReview({ ...context, onProgress }).completion;
   }
   const thread = getDb().prepare("SELECT pr_id FROM threads WHERE id = ?").get(payload.threadId) as
     | { pr_id: number }
@@ -33,9 +36,10 @@ async function execute(payload: WorkPayload): Promise<unknown> {
       ...context,
       threadId: payload.threadId,
       userMessage: payload.message,
+      onProgress,
     }).completion;
   }
-  return startRevalidate({ ...context, threadId: payload.threadId }).completion;
+  return startRevalidate({ ...context, threadId: payload.threadId, onProgress }).completion;
 }
 
 async function main(): Promise<void> {
@@ -46,7 +50,7 @@ async function main(): Promise<void> {
   const stopHeartbeat = startWorkHeartbeat(workId, claim.workerToken);
   try {
     const payload = JSON.parse(claim.row.payload) as WorkPayload;
-    const result = await execute(payload);
+    const result = await execute(workId, payload);
     completeWorkItem(workId, claim.workerToken, result);
   } catch (error) {
     failWorkItem(workId, claim.workerToken, error);

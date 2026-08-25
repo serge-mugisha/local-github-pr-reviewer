@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { getDb, type WorkItemRow } from "./db.js";
 
@@ -26,6 +28,18 @@ export type WorkPayload =
 export interface EnqueuedWork {
   workId: string;
   created: boolean;
+}
+
+export interface WorkEvent {
+  type: "log" | "stdout" | "stderr";
+  data: string;
+}
+
+export interface WorkEventRow {
+  id: number;
+  work_id: string;
+  event: string;
+  created_at: string;
 }
 
 function now(): string {
@@ -121,7 +135,27 @@ export function enqueueWork(
   return result;
 }
 
-const workerEntrypoint = fileURLToPath(new URL("./worker.js", import.meta.url));
+const compiledWorkerEntrypoint = fileURLToPath(new URL("./worker.js", import.meta.url));
+const sourceWorkerEntrypoint = fileURLToPath(new URL("./worker.ts", import.meta.url));
+const requireFromHere = createRequire(import.meta.url);
+
+export function resolveWorkerLaunch(
+  workId: string,
+  fileExists: (path: string) => boolean = existsSync,
+): { command: string; args: string[] } {
+  if (fileExists(compiledWorkerEntrypoint)) {
+    return { command: process.execPath, args: [compiledWorkerEntrypoint, workId] };
+  }
+  if (fileExists(sourceWorkerEntrypoint)) {
+    return {
+      command: process.execPath,
+      args: [requireFromHere.resolve("tsx/cli"), sourceWorkerEntrypoint, workId],
+    };
+  }
+  throw new Error(
+    "Reviewer worker entrypoint is missing. Run npm run build before starting Reviewer.",
+  );
+}
 
 export function ensureWorkItemRunning(workId: string): WorkItemRow {
   reconcileInterruptedWorkItems();
@@ -150,7 +184,16 @@ export function ensureWorkItemRunning(workId: string): WorkItemRow {
       )
       .run(launchAt, workId, new Date(Date.now() - LAUNCH_RETRY_AFTER_MS).toISOString());
     if (reserved.changes !== 1) return getWorkItem(workId)!;
-    const child = spawn(process.execPath, [workerEntrypoint, workId], {
+    let launch: ReturnType<typeof resolveWorkerLaunch>;
+    try {
+      launch = resolveWorkerLaunch(workId);
+    } catch (error) {
+      getDb()
+        .prepare("UPDATE work_items SET status = 'error', error = ?, finished_at = ? WHERE id = ?")
+        .run(error instanceof Error ? error.message : String(error), now(), workId);
+      return getWorkItem(workId)!;
+    }
+    const child = spawn(launch.command, launch.args, {
       detached: process.platform !== "win32",
       stdio: "ignore",
     });
@@ -173,6 +216,23 @@ export function ensureWorkItemRunning(workId: string): WorkItemRow {
     work = getWorkItem(workId)!;
   }
   return work;
+}
+
+export function appendWorkEvent(workId: string, event: WorkEvent): void {
+  try {
+    getDb()
+      .prepare("INSERT INTO work_events (work_id, event, created_at) VALUES (?, ?, ?)")
+      .run(workId, JSON.stringify(event), now());
+  } catch {
+    // Progress is diagnostic, never authoritative. A transient DB lock may
+    // drop a line, but must not interrupt the review that produces the result.
+  }
+}
+
+export function listWorkEvents(workId: string, afterId = 0): WorkEventRow[] {
+  return getDb()
+    .prepare("SELECT * FROM work_events WHERE work_id = ? AND id > ? ORDER BY id")
+    .all(workId, afterId) as WorkEventRow[];
 }
 
 export interface ClaimedWork {
@@ -236,12 +296,21 @@ export function failWorkItem(workId: string, workerToken: string, error: unknown
 
 export async function waitForWorkItem(
   workId: string,
-  options: { signal?: AbortSignal; timeoutMs?: number } = {},
+  options: {
+    signal?: AbortSignal;
+    timeoutMs?: number;
+    onEvent?: (event: WorkEvent) => void;
+  } = {},
 ): Promise<WorkItemRow> {
   const started = Date.now();
   const timeoutMs = options.timeoutMs ?? 21 * 60 * 1_000;
+  let eventCursor = 0;
   for (;;) {
     const work = ensureWorkItemRunning(workId);
+    for (const row of listWorkEvents(workId, eventCursor)) {
+      eventCursor = row.id;
+      options.onEvent?.(JSON.parse(row.event) as WorkEvent);
+    }
     if (work.status === "done") return work;
     if (work.status === "error" || work.status === "cancelled") {
       throw new Error(work.error ?? `Reviewer work item ${workId} failed.`);

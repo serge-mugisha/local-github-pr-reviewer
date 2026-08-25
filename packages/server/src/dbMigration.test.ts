@@ -87,6 +87,11 @@ describe("PR schema migration", () => {
           "last_launch_at",
         ]),
       );
+      expect(
+        (migrated.pragma("table_info(work_events)") as { name: string }[]).map(
+          (column) => column.name,
+        ),
+      ).toEqual(expect.arrayContaining(["work_id", "event", "created_at"]));
       migrated.close();
     } finally {
       await rm(dir, { recursive: true, force: true });

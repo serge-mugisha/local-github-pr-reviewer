@@ -134,6 +134,13 @@ export function migrateDatabase(db: Database.Database): void {
       last_launch_at TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS work_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      work_id TEXT NOT NULL REFERENCES work_items(id) ON DELETE CASCADE,
+      event TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS skills (
       repo_id INTEGER PRIMARY KEY REFERENCES repos(id) ON DELETE CASCADE,
       body TEXT NOT NULL DEFAULT '',
@@ -198,6 +205,7 @@ export function migrateDatabase(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_comments_thread ON comments(thread_id);
     CREATE INDEX IF NOT EXISTS idx_thread_actions_thread ON thread_actions(thread_id);
     CREATE INDEX IF NOT EXISTS idx_work_items_status ON work_items(status);
+    CREATE INDEX IF NOT EXISTS idx_work_events_work ON work_events(work_id, id);
     CREATE INDEX IF NOT EXISTS idx_prs_repo ON prs(repo_id);
     CREATE INDEX IF NOT EXISTS idx_ai_sessions_pr ON ai_sessions(pr_id);
   `);
