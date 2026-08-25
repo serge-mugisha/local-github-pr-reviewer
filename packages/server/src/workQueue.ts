@@ -19,6 +19,7 @@ const MAX_ATTEMPTS = 3;
 const MAX_LAUNCH_ATTEMPTS = 3;
 const LAUNCH_RETRY_AFTER_MS = 5_000;
 const POLL_INTERVAL_MS = 250;
+const FINISHED_EVENT_RETENTION_MS = 24 * 60 * 60 * 1_000;
 
 export type WorkPayload =
   | { kind: "review"; prId: number }
@@ -80,6 +81,7 @@ export function reconcileInterruptedWorkItems(): number {
           `UPDATE work_items
            SET status = 'queued', started_at = NULL, heartbeat_at = NULL,
                worker_token = NULL, worker_pid = NULL,
+               launch_count = 0, last_launch_at = NULL,
                error = 'Worker disappeared; retrying safely.'
            WHERE id = ? AND status = 'running' AND worker_token = ?`,
         )
@@ -98,6 +100,19 @@ export function reconcileInterruptedWorkItems(): number {
   return changed;
 }
 
+export function pruneFinishedWorkEvents(retentionMs = FINISHED_EVENT_RETENTION_MS): number {
+  const cutoff = new Date(Date.now() - retentionMs).toISOString();
+  return getDb()
+    .prepare(
+      `DELETE FROM work_events
+       WHERE work_id IN (
+         SELECT id FROM work_items
+         WHERE status IN ('done', 'error', 'cancelled') AND finished_at < ?
+       )`,
+    )
+    .run(cutoff).changes;
+}
+
 export function enqueueWork(
   payload: WorkPayload,
   options: { beforeCreate?: () => void } = {},
@@ -106,6 +121,7 @@ export function enqueueWork(
   const key = dedupeKey(payload);
   const result = db
     .transaction(() => {
+      pruneFinishedWorkEvents();
       reconcileInterruptedWorkItems();
       const active = db
         .prepare(
@@ -133,6 +149,22 @@ export function enqueueWork(
     .immediate();
   ensureWorkItemRunning(result.workId);
   return result;
+}
+
+export function enqueueReplyWork(threadId: number, message: string, headSha: string): EnqueuedWork {
+  return enqueueWork(
+    { kind: "reply", threadId, message },
+    {
+      beforeCreate: () => {
+        getDb()
+          .prepare(
+            `INSERT INTO comments (thread_id, author, body, head_sha, kind, created_at)
+             VALUES (?, 'user', ?, ?, 'normal', ?)`,
+          )
+          .run(threadId, message, headSha, now());
+      },
+    },
+  );
 }
 
 const compiledWorkerEntrypoint = fileURLToPath(new URL("./worker.js", import.meta.url));
@@ -176,7 +208,7 @@ export function ensureWorkItemRunning(workId: string): WorkItemRow {
       getDb()
         .prepare(
           `UPDATE work_items SET status = 'error', finished_at = ?,
-             error = COALESCE(error, 'Reviewer worker could not be launched.')
+             error = 'Reviewer worker could not be launched after repeated launch failures.'
            WHERE id = ? AND status = 'queued'`,
         )
         .run(now(), workId);

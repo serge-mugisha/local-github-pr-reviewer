@@ -818,7 +818,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
         if (!row) throw new McpError(ErrorCode.InvalidParams, "Thread not found");
         const pr = requirePr(row.pr_id);
         api.resolveReviewerProvider(requireRepo(pr.repo_id), pr);
-        const queued = api.enqueueWork({ kind: "reply", threadId, message });
+        const queued = api.enqueueReplyWork(threadId, message, pr.head_sha);
         return { task: taskFromWork(api.getWorkItem(queued.workId)!) };
       }
       case "revalidate_thread": {

@@ -36,6 +36,7 @@ async function execute(workId: string, payload: WorkPayload): Promise<unknown> {
       ...context,
       threadId: payload.threadId,
       userMessage: payload.message,
+      userMessageAlreadyPersisted: true,
       onProgress,
     }).completion;
   }

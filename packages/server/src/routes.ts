@@ -37,7 +37,7 @@ import {
 import { catalogForClient } from "./reviewCatalog.js";
 import { buildReviewInstructions } from "./providers/prompt.js";
 import { setThreadStatus, reconcileInterruptedReviews, getLatestReviewForPR } from "./review.js";
-import { enqueueWork, waitForWorkItem } from "./workQueue.js";
+import { enqueueReplyWork, enqueueWork, waitForWorkItem } from "./workQueue.js";
 import * as gh from "./github.js";
 import { listProviders, listProviderStatus, getProvider } from "./providers/index.js";
 import { getSettings, setProvider } from "./settings.js";
@@ -490,8 +490,8 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     sseSend(reply, "log", { message: `replying with ${providerId}…` });
     let inputPersisted = false;
     try {
-      const queued = enqueueWork({ kind: "reply", threadId, message: body.body });
-      // The durable work envelope persists the user's input before execution.
+      const queued = enqueueReplyWork(threadId, body.body, pr.head_sha);
+      // The enqueue transaction persists the user's input before execution.
       inputPersisted = true;
       sseSend(reply, "log", {
         message: `${queued.created ? "queued" : "joined"} durable reply task ${queued.workId}`,

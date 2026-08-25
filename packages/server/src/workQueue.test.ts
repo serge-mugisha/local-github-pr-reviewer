@@ -5,10 +5,12 @@ import {
   appendWorkEvent,
   claimWorkItem,
   completeWorkItem,
+  enqueueReplyWork,
   enqueueWork,
   ensureWorkItemRunning,
   getWorkItem,
   listWorkEvents,
+  pruneFinishedWorkEvents,
   reconcileInterruptedWorkItems,
   resolveWorkerLaunch,
 } from "./workQueue.js";
@@ -111,6 +113,36 @@ describe("durable Reviewer work queue", () => {
     );
   });
 
+  it("persists a reply exactly once in the enqueue transaction", () => {
+    mocks.db
+      .prepare("INSERT INTO repos (id, owner, name, local_path) VALUES (1, 'test', 'repo', '/tmp')")
+      .run();
+    mocks.db
+      .prepare(
+        `INSERT INTO prs
+         (id, repo_id, number, title, head_sha, base_sha, head_ref, base_ref,
+          state, url, updated_at)
+         VALUES (1, 1, 1, 'PR', 'head-sha', 'base-sha', 'feature', 'main',
+                 'OPEN', 'https://example.test/pr/1', '2026-01-01T00:00:00.000Z')`,
+      )
+      .run();
+    mocks.db
+      .prepare(
+        `INSERT INTO threads
+         (id, pr_id, status, first_seen_sha, last_seen_sha, created_at)
+         VALUES (7, 1, 'open', 'head-sha', 'head-sha', '2026-01-01T00:00:00.000Z')`,
+      )
+      .run();
+    const first = enqueueReplyWork(7, "please explain", "head-sha");
+    const second = enqueueReplyWork(7, "please explain", "head-sha");
+    const comments = mocks.db
+      .prepare("SELECT author, body, head_sha FROM comments WHERE thread_id = ?")
+      .all(7);
+
+    expect(second).toEqual({ workId: first.workId, created: false });
+    expect(comments).toEqual([{ author: "user", body: "please explain", head_sha: "head-sha" }]);
+  });
+
   it("requeues a task whose worker disappeared and fences its stale token", () => {
     const queued = enqueueWork({ kind: "review", prId: 9 });
     const claim = claimWorkItem(queued.workId)!;
@@ -119,7 +151,12 @@ describe("durable Reviewer work queue", () => {
       .run(999_999_999, "2000-01-01T00:00:00.000Z", queued.workId);
 
     expect(reconcileInterruptedWorkItems()).toBe(1);
-    expect(getWorkItem(queued.workId)).toMatchObject({ status: "queued", worker_token: null });
+    expect(getWorkItem(queued.workId)).toMatchObject({
+      status: "queued",
+      worker_token: null,
+      launch_count: 0,
+      last_launch_at: null,
+    });
     expect(() => completeWorkItem(queued.workId, claim.workerToken, {})).toThrow(
       "lost its worker lease",
     );
@@ -141,10 +178,24 @@ describe("durable Reviewer work queue", () => {
       expect(getWorkItem(queued.workId)).toMatchObject({
         status: "error",
         launch_count: 3,
+        error: "Reviewer worker could not be launched after repeated launch failures.",
       });
       expect(mocks.spawn).toHaveBeenCalledTimes(3);
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("prunes progress for terminal work after the retention window", () => {
+    const queued = enqueueWork({ kind: "review", prId: 123 });
+    const claim = claimWorkItem(queued.workId)!;
+    appendWorkEvent(queued.workId, { type: "stdout", data: "raw provider output" });
+    completeWorkItem(queued.workId, claim.workerToken, {});
+    mocks.db
+      .prepare("UPDATE work_items SET finished_at = '2000-01-01T00:00:00.000Z' WHERE id = ?")
+      .run(queued.workId);
+
+    expect(pruneFinishedWorkEvents()).toBe(1);
+    expect(listWorkEvents(queued.workId)).toEqual([]);
   });
 });
