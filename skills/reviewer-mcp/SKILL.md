@@ -39,7 +39,7 @@ Every open, non-stale finding must receive an explicit disposition before anothe
 - **Patch and resolve:** Use `set_thread_status` with `resolved` when the correction is straightforward and independently verified, so another AI pass would add little value.
 - **Dismiss and resolve:** When the finding is incorrect, irrelevant, outside scope, or based on missing context, retain control of the decision. Prefer adding a concise local rationale with `reply_to_thread` when it will help future readers, then mark the thread resolved.
 
-`revalidate_thread` and `reply_to_thread` use the same capability-adaptive behavior: native MCP Tasks on capable hosts and progress-kept durable calls on legacy hosts. Call the chosen action once and use its terminal result. Do not call `await_thread_action`, poll `get_job_status`, or repeat the mutation because a bridge was recycled.
+`revalidate_thread` and `reply_to_thread` use the same capability-adaptive behavior: native MCP Tasks on capable hosts and progress-kept durable calls on legacy hosts. Call the chosen action once and use its terminal result. Do not call `await_thread_action`, poll `get_job_status`, or repeat the mutation because a bridge was recycled, except for the correlated one-shot transport-timeout recovery below.
 
 Never leave an addressed or dismissed thread open and start another full review. First revalidate or resolve all prior findings. If patches changed the PR head, run one fresh full review afterward so the final gate covers the new SHA.
 
@@ -53,7 +53,7 @@ Do not enter an endless review-fix loop. Address material correctness, security,
 - If a detached worker disappears, Reviewer fences its lease and retries safely. A stale worker cannot publish after recovery.
 - If the operation returns a terminal error after bounded worker retries, report the precise error and correct the cause only within the user's authorized scope. A later review may use one new `trigger_review` call.
 - If the PR head changed after a completed review, that result does not gate the new head. Finish disposition of its threads, refresh the PR, and trigger one new review; let the call return its terminal result.
-- Never repeat a reply or revalidation merely because its original connection closed; its work item remains durable independently of the bridge.
+- Never repeat a reply or revalidation merely because its original connection closed. Only the correlated one-shot transport-timeout recovery above may reattach or retry the identical action; never retry speculatively or loop.
 
 Do not call `clear_pr_review` as ordinary recovery. It deletes local review history and threads; use it only when the user explicitly wants that data cleared or a task specifically requires a clean slate.
 
