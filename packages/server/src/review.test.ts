@@ -322,7 +322,7 @@ describe("startReview", () => {
     await expect(waiting).resolves.toMatchObject({ id: reviewId, status: "done" });
   });
 
-  it("does not reclaim a sleeping review while its owner process is alive", () => {
+  it("fences a stale heartbeat even when its recorded PID is alive", () => {
     const old = new Date(Date.now() - 60_000).toISOString();
     const reviewId = Number(
       mocks.db
@@ -335,12 +335,6 @@ describe("startReview", () => {
         .lastInsertRowid,
     );
 
-    expect(reconcileInterruptedReviews()).toBe(0);
-    expect(mocks.db.prepare("SELECT status FROM reviews WHERE id = ?").get(reviewId)).toEqual({
-      status: "running",
-    });
-
-    mocks.db.prepare("UPDATE reviews SET worker_pid = ? WHERE id = ?").run(999_999_999, reviewId);
     expect(reconcileInterruptedReviews()).toBe(1);
     expect(mocks.db.prepare("SELECT status FROM reviews WHERE id = ?").get(reviewId)).toEqual({
       status: "error",

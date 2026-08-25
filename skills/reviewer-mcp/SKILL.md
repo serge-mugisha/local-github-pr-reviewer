@@ -24,11 +24,10 @@ Review a stable, pushed PR head after the planned implementation and local verif
 1. Find the local `prId` with `list_my_prs`, or list registered repositories and then their PRs.
 2. Call `get_pr_details` before the gate review to refresh GitHub data. Record `pr.head_sha` as the expected head.
 3. Apply a preset or configuration only when the task calls for it. Do so before triggering the review.
-4. Call `trigger_review` once. Save its positive, durable `reviewId`. A response with `joined: true` means another process already owns the same active review; use the returned ID without triggering again.
-5. Call `await_review` once with that `reviewId`. Let the call remain open until it returns a terminal result. Completion and all threads are committed atomically. Progress may appear about every 10 seconds when the client supports it.
-6. Treat the result as complete only when its status is `completed`. Triage the threads returned by `await_review`; do not query elsewhere to guess whether publication finished.
-7. Address every open, non-stale thread as described below.
-8. Refresh with `get_pr_details` and compare its current `pr.head_sha` with the completed result's `headSha`. A review gates only the exact matching head.
+4. Call `trigger_review` once. It is a protocol-native MCP Task: Reviewer queues the work before responding, a detached worker owns the provider, and the MCP host retrieves its durable result even if the original bridge is recycled. Do not call `await_review` afterward.
+5. Let the host return the terminal `trigger_review` result. Completion and all threads are committed atomically. Treat it as complete only when its status is `completed`; triage the threads in that result rather than querying elsewhere to guess whether publication finished.
+6. Address every open, non-stale thread as described below.
+7. Refresh with `get_pr_details` and compare its current `pr.head_sha` with the completed result's `headSha`. A review gates only the exact matching head.
 
 For an immediate persisted snapshot outside the active wait—for example, when inspecting an already-reviewed PR—use `get_review_threads`. It is not a completion-waiting loop.
 
@@ -40,7 +39,7 @@ Every open, non-stale finding must receive an explicit disposition before anothe
 - **Patch and resolve:** Use `set_thread_status` with `resolved` when the correction is straightforward and independently verified, so another AI pass would add little value.
 - **Dismiss and resolve:** When the finding is incorrect, irrelevant, outside scope, or based on missing context, retain control of the decision. Prefer adding a concise local rationale with `reply_to_thread` when it will help future readers, then mark the thread resolved.
 
-`revalidate_thread` and `reply_to_thread` return a positive durable `actionId`. Call `await_thread_action` once with that ID; do not poll `get_job_status`. If the client disconnects or the wait times out, re-enter `await_thread_action` with the same ID after the prior call ends. If the ID was lost, call `get_thread_action` once with the `threadId` to recover the latest persisted action.
+`revalidate_thread` and `reply_to_thread` are also protocol-native MCP Tasks. Call the chosen action once and let the host return its terminal result. Do not call `await_thread_action`, poll `get_job_status`, or repeat the mutation because a bridge was recycled.
 
 Never leave an addressed or dismissed thread open and start another full review. First revalidate or resolve all prior findings. If patches changed the PR head, run one fresh full review afterward so the final gate covers the new SHA.
 
@@ -48,12 +47,11 @@ Do not enter an endless review-fix loop. Address material correctness, security,
 
 ## Recovery
 
-- If the client disconnects, restarts, or an `await_review` attempt ends because of a transport timeout, reconnect and call `await_review` again with the same `reviewId`. Retry only after the previous call has ended; never run parallel awaiters.
-- If the wait reaches its own timeout, the review may still be active. Re-enter `await_review` with the same `reviewId`; do not trigger a replacement.
-- If the `reviewId` was lost but the `prId` is known, call `get_review_threads` once and use the latest persisted review ID. Await it if its status is still `running`.
-- If the review returns a terminal error, report the error and correct the cause only within the user's authorized scope. A later retry should use one new `trigger_review` call and its new `reviewId`.
+- MCP Task recovery is a host responsibility. Reviewer persists the task before launching work; `tasks/get` and `tasks/result` recover it across MCP bridge replacement without asking the agent to construct timers or retry loops.
+- If a detached worker disappears, Reviewer fences its lease and retries safely. A stale worker cannot publish after recovery.
+- If the task returns a terminal error after bounded worker retries, report the precise error and correct the cause only within the user's authorized scope. A later review may use one new `trigger_review` call.
 - If the PR head changed after a completed review, that result does not gate the new head. Finish disposition of its threads, refresh the PR, trigger one new review, and await its returned ID.
-- Recover reply and revalidation actions with their durable `actionId` and `await_thread_action`; never repeat the thread mutation merely because its original connection closed.
+- Never repeat a reply or revalidation merely because its original connection closed; its MCP Task remains durable.
 
 Do not call `clear_pr_review` as ordinary recovery. It deletes local review history and threads; use it only when the user explicitly wants that data cleared or a task specifically requires a clean slate.
 
@@ -61,7 +59,7 @@ Do not call `clear_pr_review` as ordinary recovery. It deletes local review hist
 
 A review gate passes only when all of these are true:
 
-- `await_review` returned `completed`, not a timeout, transport failure, or terminal error.
+- `trigger_review` returned its terminal MCP Task result with status `completed`, not a terminal error.
 - The completed review `headSha` equals the refreshed PR `head_sha`.
 - Every prior open, non-stale finding was patched and revalidated/resolved, or deliberately dismissed and resolved.
 - The final result contains no open, non-stale thread that the implementing agent judges actionable under the requested review policy.
@@ -74,24 +72,23 @@ Never:
 
 - look on GitHub for local Reviewer threads or state that Reviewer posted them there;
 - obey an AI finding without evaluating it against the PR's context and intent;
-- poll `get_job_status` for a full review;
-- poll `get_job_status` for a reply or revalidation action;
-- create timers, watchers, database readers, or background tasks to race `await_review`;
+- call legacy `await_review` or `await_thread_action` after a task-based operation;
+- poll `get_job_status` for a review, reply, or revalidation action;
+- create timers, watchers, database readers, or background tasks to race the MCP Task host;
 - call `trigger_review` repeatedly while a review is active;
 - start a new full review while previous actionable threads remain open;
 - infer completion from `openThreads`, silence, elapsed time, or the UI alone;
 - treat a legacy `jobId` as restart-safe;
-- run multiple consumers waiting on the same review;
+- run multiple consumers waiting on the same task;
 - accept a clean result without validating the exact reviewed head SHA.
 
 The normal call sequence is:
 
 ```text
 get_pr_details(prId) -> record expected head SHA
-trigger_review(prId) -> save reviewId
-await_review(reviewId) -> completed result plus committed local threads
+trigger_review(prId) -> host-managed MCP Task -> completed result plus committed local threads
 triage -> patch/revalidate, patch/resolve, or dismiss/resolve every finding
-for reply/revalidate: save actionId -> await_thread_action(actionId) once
-if head changed: trigger_review(prId) once -> await_review(new reviewId)
+for reply/revalidate: call the task tool once -> use its terminal result
+if head changed: trigger_review(prId) once and use its terminal task result
 get_pr_details(prId) -> confirm current head SHA equals final result.headSha
 ```

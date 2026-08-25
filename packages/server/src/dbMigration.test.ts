@@ -71,6 +71,22 @@ describe("PR schema migration", () => {
           "worker_pid",
         ]),
       );
+      expect(
+        (migrated.pragma("table_info(work_items)") as { name: string }[]).map(
+          (column) => column.name,
+        ),
+      ).toEqual(
+        expect.arrayContaining([
+          "dedupe_key",
+          "status",
+          "heartbeat_at",
+          "worker_token",
+          "worker_pid",
+          "attempt_count",
+          "launch_count",
+          "last_launch_at",
+        ]),
+      );
       migrated.close();
     } finally {
       await rm(dir, { recursive: true, force: true });

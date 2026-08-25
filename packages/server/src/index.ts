@@ -4,7 +4,7 @@ import fastifyStatic from "@fastify/static";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync } from "node:fs";
-import { loadConfig } from "./config.js";
+import { dataDir, loadConfig } from "./config.js";
 import { syncReposFromConfig, listRepos } from "./db.js";
 import { purgeClosedForRepo } from "./prs.js";
 import { pruneStaleWorktrees } from "./prWorktree.js";
@@ -15,7 +15,7 @@ import { abortLocalReviewWork } from "./review.js";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = resolve(__dirname, "../../..");
 const WEB_DIST = resolve(PROJECT_ROOT, "packages/web/dist");
-const PID_FILE = resolve(PROJECT_ROOT, "data", "reviewer.pid");
+const PID_FILE = resolve(dataDir(), "reviewer.pid");
 
 function isPidAlive(pid: number): boolean {
   try {

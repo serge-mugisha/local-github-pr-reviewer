@@ -150,7 +150,7 @@ via `spawn`/`exec`. See [SECURITY.md](SECURITY.md) for details.
 
 ## MCP Server for AI Agents
 
-The tool includes a Model Context Protocol (MCP) server that exposes all PR reviewing, configuration, and conversational features to external AI agents (like Claude Desktop or Antigravity). This allows an AI agent to read PR diffs, set review rules, trigger reviews, and reply to threads directly from its own environment without using the web UI.
+The tool includes a Model Context Protocol (MCP) server that exposes all PR reviewing, configuration, and conversational features to external AI agents (like Claude Desktop or Antigravity). This allows an AI agent to read PR diffs, set review rules, trigger reviews, and reply to threads directly from its own environment without using the web UI. Long-running review, reply, and revalidation calls use durable MCP Tasks backed by SQLite and detached Reviewer workers, so provider execution survives client timeouts and MCP bridge replacement without agent-authored polling or restart scripts.
 
 ### Usage with MCP Clients
 

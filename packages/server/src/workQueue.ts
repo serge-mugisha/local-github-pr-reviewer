@@ -1,0 +1,266 @@
+import { randomUUID } from "node:crypto";
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { getDb, type WorkItemRow } from "./db.js";
+
+const configuredHeartbeatMs = Number(process.env.REVIEWER_HEARTBEAT_MS);
+const HEARTBEAT_MS =
+  Number.isFinite(configuredHeartbeatMs) && configuredHeartbeatMs >= 25
+    ? configuredHeartbeatMs
+    : 5_000;
+const configuredStaleAfterMs = Number(process.env.REVIEWER_STALE_AFTER_MS);
+const STALE_AFTER_MS =
+  Number.isFinite(configuredStaleAfterMs) && configuredStaleAfterMs >= 250
+    ? configuredStaleAfterMs
+    : 30_000;
+const MAX_ATTEMPTS = 3;
+const MAX_LAUNCH_ATTEMPTS = 3;
+const LAUNCH_RETRY_AFTER_MS = 5_000;
+const POLL_INTERVAL_MS = 250;
+
+export type WorkPayload =
+  | { kind: "review"; prId: number }
+  | { kind: "reply"; threadId: number; message: string }
+  | { kind: "revalidate"; threadId: number };
+
+export interface EnqueuedWork {
+  workId: string;
+  created: boolean;
+}
+
+function now(): string {
+  return new Date().toISOString();
+}
+
+function dedupeKey(payload: WorkPayload): string {
+  if (payload.kind === "review") return `review:${payload.prId}`;
+  return `thread:${payload.threadId}`;
+}
+
+export function getWorkItem(workId: string): WorkItemRow | undefined {
+  return getDb().prepare("SELECT * FROM work_items WHERE id = ?").get(workId) as
+    | WorkItemRow
+    | undefined;
+}
+
+export function listWorkItems(): WorkItemRow[] {
+  return getDb()
+    .prepare("SELECT * FROM work_items ORDER BY created_at DESC")
+    .all() as WorkItemRow[];
+}
+
+export function reconcileInterruptedWorkItems(): number {
+  const db = getDb();
+  const staleBefore = new Date(Date.now() - STALE_AFTER_MS).toISOString();
+  const candidates = db
+    .prepare(
+      `SELECT * FROM work_items
+       WHERE status = 'running' AND (heartbeat_at IS NULL OR heartbeat_at < ?)`,
+    )
+    .all(staleBefore) as WorkItemRow[];
+  let changed = 0;
+  for (const work of candidates) {
+    if (work.attempt_count < MAX_ATTEMPTS) {
+      changed += getDb()
+        .prepare(
+          `UPDATE work_items
+           SET status = 'queued', started_at = NULL, heartbeat_at = NULL,
+               worker_token = NULL, worker_pid = NULL,
+               error = 'Worker disappeared; retrying safely.'
+           WHERE id = ? AND status = 'running' AND worker_token = ?`,
+        )
+        .run(work.id, work.worker_token).changes;
+    } else {
+      changed += getDb()
+        .prepare(
+          `UPDATE work_items
+           SET status = 'error', finished_at = ?,
+               error = 'Reviewer worker repeatedly disappeared before completion.'
+           WHERE id = ? AND status = 'running' AND worker_token = ?`,
+        )
+        .run(now(), work.id, work.worker_token).changes;
+    }
+  }
+  return changed;
+}
+
+export function enqueueWork(
+  payload: WorkPayload,
+  options: { beforeCreate?: () => void } = {},
+): EnqueuedWork {
+  const db = getDb();
+  const key = dedupeKey(payload);
+  const result = db
+    .transaction(() => {
+      reconcileInterruptedWorkItems();
+      const active = db
+        .prepare(
+          `SELECT id, payload FROM work_items
+           WHERE dedupe_key = ? AND status IN ('queued', 'running')
+           ORDER BY created_at DESC LIMIT 1`,
+        )
+        .get(key) as { id: string; payload: string } | undefined;
+      if (active) {
+        if (active.payload === JSON.stringify(payload)) {
+          return { workId: active.id, created: false };
+        }
+        throw new Error(
+          `Thread ${"threadId" in payload ? payload.threadId : "unknown"} already has another active Reviewer action. Wait for its task result before starting a new one.`,
+        );
+      }
+      options.beforeCreate?.();
+      const workId = randomUUID();
+      db.prepare(
+        `INSERT INTO work_items (id, kind, dedupe_key, payload, status, created_at)
+         VALUES (?, ?, ?, ?, 'queued', ?)`,
+      ).run(workId, payload.kind, key, JSON.stringify(payload), now());
+      return { workId, created: true };
+    })
+    .immediate();
+  ensureWorkItemRunning(result.workId);
+  return result;
+}
+
+const workerEntrypoint = fileURLToPath(new URL("./worker.js", import.meta.url));
+
+export function ensureWorkItemRunning(workId: string): WorkItemRow {
+  reconcileInterruptedWorkItems();
+  let work = getWorkItem(workId);
+  if (!work) throw new Error(`Reviewer work item ${workId} not found.`);
+  if (work.status === "queued") {
+    const lastLaunch = work.last_launch_at ? Date.parse(work.last_launch_at) : 0;
+    if (Date.now() - lastLaunch < LAUNCH_RETRY_AFTER_MS) return work;
+    if (work.launch_count >= MAX_LAUNCH_ATTEMPTS) {
+      getDb()
+        .prepare(
+          `UPDATE work_items SET status = 'error', finished_at = ?,
+             error = COALESCE(error, 'Reviewer worker could not be launched.')
+           WHERE id = ? AND status = 'queued'`,
+        )
+        .run(now(), workId);
+      return getWorkItem(workId)!;
+    }
+    const launchAt = now();
+    const reserved = getDb()
+      .prepare(
+        `UPDATE work_items
+         SET launch_count = launch_count + 1, last_launch_at = ?
+         WHERE id = ? AND status = 'queued'
+           AND (last_launch_at IS NULL OR last_launch_at < ?)`,
+      )
+      .run(launchAt, workId, new Date(Date.now() - LAUNCH_RETRY_AFTER_MS).toISOString());
+    if (reserved.changes !== 1) return getWorkItem(workId)!;
+    const child = spawn(process.execPath, [workerEntrypoint, workId], {
+      detached: process.platform !== "win32",
+      stdio: "ignore",
+    });
+    child.once("error", (error) => {
+      getDb()
+        .prepare("UPDATE work_items SET error = ? WHERE id = ? AND status = 'queued'")
+        .run(`Reviewer worker launch failed: ${error.message}`, workId);
+    });
+    child.once("exit", (code, signal) => {
+      const current = getWorkItem(workId);
+      if (current?.status !== "queued") return;
+      getDb()
+        .prepare("UPDATE work_items SET error = ? WHERE id = ? AND status = 'queued'")
+        .run(
+          `Reviewer worker exited before claiming work (code ${code ?? "none"}, signal ${signal ?? "none"}).`,
+          workId,
+        );
+    });
+    child.unref();
+    work = getWorkItem(workId)!;
+  }
+  return work;
+}
+
+export interface ClaimedWork {
+  row: WorkItemRow;
+  workerToken: string;
+}
+
+export function claimWorkItem(workId: string): ClaimedWork | undefined {
+  const db = getDb();
+  const workerToken = randomUUID();
+  const timestamp = now();
+  const claimed = db
+    .prepare(
+      `UPDATE work_items
+       SET status = 'running', started_at = ?, heartbeat_at = ?,
+           worker_token = ?, worker_pid = ?, attempt_count = attempt_count + 1,
+           error = NULL
+       WHERE id = ? AND status = 'queued'`,
+    )
+    .run(timestamp, timestamp, workerToken, process.pid, workId);
+  if (claimed.changes !== 1) return undefined;
+  return { row: getWorkItem(workId)!, workerToken };
+}
+
+export function startWorkHeartbeat(workId: string, workerToken: string): () => void {
+  const statement = getDb().prepare(
+    "UPDATE work_items SET heartbeat_at = ? WHERE id = ? AND worker_token = ? AND status = 'running'",
+  );
+  const timer = setInterval(() => {
+    try {
+      statement.run(now(), workId, workerToken);
+    } catch {
+      // A transient SQLite lock must not kill the detached worker. If writes
+      // remain unavailable past the lease window, another process fences this
+      // token and the final publication below is rejected safely.
+    }
+  }, HEARTBEAT_MS);
+  return () => clearInterval(timer);
+}
+
+export function completeWorkItem(workId: string, workerToken: string, result: unknown): void {
+  const updated = getDb()
+    .prepare(
+      `UPDATE work_items
+       SET status = 'done', result = ?, error = NULL, finished_at = ?, heartbeat_at = ?
+       WHERE id = ? AND worker_token = ? AND status = 'running'`,
+    )
+    .run(JSON.stringify(result), now(), now(), workId, workerToken);
+  if (updated.changes !== 1) throw new Error(`Work item ${workId} lost its worker lease.`);
+}
+
+export function failWorkItem(workId: string, workerToken: string, error: unknown): void {
+  getDb()
+    .prepare(
+      `UPDATE work_items
+       SET status = 'error', error = ?, finished_at = ?, heartbeat_at = ?
+       WHERE id = ? AND worker_token = ? AND status = 'running'`,
+    )
+    .run(error instanceof Error ? error.message : String(error), now(), now(), workId, workerToken);
+}
+
+export async function waitForWorkItem(
+  workId: string,
+  options: { signal?: AbortSignal; timeoutMs?: number } = {},
+): Promise<WorkItemRow> {
+  const started = Date.now();
+  const timeoutMs = options.timeoutMs ?? 21 * 60 * 1_000;
+  for (;;) {
+    const work = ensureWorkItemRunning(workId);
+    if (work.status === "done") return work;
+    if (work.status === "error" || work.status === "cancelled") {
+      throw new Error(work.error ?? `Reviewer work item ${workId} failed.`);
+    }
+    if (Date.now() - started >= timeoutMs) {
+      throw new Error(`Timed out waiting for Reviewer work item ${workId}.`);
+    }
+    await new Promise<void>((resolve, reject) => {
+      const finish = () => {
+        options.signal?.removeEventListener("abort", abort);
+        resolve();
+      };
+      const timer = setTimeout(finish, POLL_INTERVAL_MS);
+      const abort = () => {
+        clearTimeout(timer);
+        options.signal?.removeEventListener("abort", abort);
+        reject(options.signal?.reason ?? new Error("Reviewer wait cancelled."));
+      };
+      options.signal?.addEventListener("abort", abort, { once: true });
+    });
+  }
+}

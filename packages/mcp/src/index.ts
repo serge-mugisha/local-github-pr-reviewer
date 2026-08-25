@@ -2,115 +2,94 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
   CallToolRequestSchema,
+  GetTaskRequestSchema,
+  GetTaskPayloadRequestSchema,
   ListToolsRequestSchema,
   ErrorCode,
   McpError,
+  type CallToolResult,
+  type Task,
 } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import * as api from "@reviewer/server/api";
-import { resolveJobStatus, type Job } from "./jobStatus.js";
+import { resolveJobStatus } from "./jobStatus.js";
 import { collectViewerPrs } from "./prDiscovery.js";
 import { handleAwaitReview } from "./awaitReview.js";
 import { handleAwaitThreadAction } from "./awaitThreadAction.js";
 import { resolveThreadActionStatus, selectThreadAction } from "./threadActionStatus.js";
 
-// Review job IDs are their durable SQLite review IDs. The in-memory cache is
-// retained only for legacy get_job_status callers; canonical waits read SQLite.
-const jobs = new Map<number, Job>();
-const MAX_JOBS = 100;
+const TASK_TTL_MS = 24 * 60 * 60 * 1_000;
+const TASK_POLL_INTERVAL_MS = 1_000;
 
-function launchJob(promise: Promise<unknown>, metadata: { reviewId: number; prId?: number }) {
-  const jobId = metadata.reviewId;
-  const job: Job = {
-    id: jobId,
-    status: "running",
-    type: "review",
-    startedAt: new Date().toISOString(),
-    ...metadata,
-  };
-  jobs.set(jobId, job);
-
-  if (jobs.size > MAX_JOBS) {
-    const oldestKeys = Array.from(jobs.keys()).slice(0, jobs.size - MAX_JOBS);
-    for (const key of oldestKeys) {
-      jobs.delete(key);
-    }
-  }
-
-  promise
-    .then((result) => {
-      const job = jobs.get(jobId);
-      if (job) {
-        job.status = "completed";
-        job.result = result;
-        job.completedAt = new Date().toISOString();
-      }
-    })
-    .catch((error) => {
-      const job = jobs.get(jobId);
-      if (job) {
-        job.status = "error";
-        job.error = String(error);
-        job.completedAt = new Date().toISOString();
-      }
-    });
-
+function taskFromWork(work: api.WorkItemRow): Task {
+  const status: Task["status"] =
+    work.status === "done"
+      ? "completed"
+      : work.status === "error"
+        ? "failed"
+        : work.status === "cancelled"
+          ? "cancelled"
+          : "working";
   return {
-    content: [
-      {
-        type: "text",
-        text: JSON.stringify(
-          {
-            jobId,
-            status: "running",
-            reviewId: metadata.reviewId,
-            prId: metadata.prId,
-          },
-          null,
-          2,
-        ),
-      },
-    ],
+    taskId: work.id,
+    status,
+    ttl: TASK_TTL_MS,
+    createdAt: work.created_at,
+    lastUpdatedAt: work.finished_at ?? work.heartbeat_at ?? work.started_at ?? work.created_at,
+    pollInterval: TASK_POLL_INTERVAL_MS,
+    statusMessage:
+      work.status === "queued"
+        ? "Queued for the detached Reviewer worker."
+        : work.status === "running"
+          ? `Reviewer worker ${work.worker_pid ?? "starting"} is running attempt ${work.attempt_count}.`
+          : (work.error ?? `Reviewer ${work.kind} ${work.status}.`),
   };
 }
 
-function threadActionLaunchResponse(started: api.StartedThreadAction<unknown>) {
-  void started.completion.catch(() => {
-    // Durable action state records the failure for await/recovery callers.
-  });
-  return {
-    content: [
+function taskMode(request: { params: unknown }): boolean {
+  const params = request.params as { task?: unknown; _meta?: { task?: unknown } };
+  return Boolean(params.task ?? params._meta?.task);
+}
+
+function completedWorkResult(work: api.WorkItemRow): CallToolResult {
+  if (work.status !== "done") {
+    return {
+      content: [{ type: "text", text: work.error ?? `Reviewer task ${work.id} failed.` }],
+      isError: true,
+    };
+  }
+  const result = JSON.parse(work.result ?? "null") as { reviewId?: number } | null;
+  if (work.kind === "review" && result?.reviewId) {
+    const review = resolveJobStatus(
+      { reviewId: result.reviewId },
       {
-        type: "text" as const,
-        text: JSON.stringify(
-          {
-            actionId: started.actionId,
-            type: started.kind,
-            status: "running",
-            created: started.created,
-            joined: !started.created,
-            nextAction:
-              "Call await_thread_action once with this actionId. Do not poll or start another action on this thread.",
-          },
-          null,
-          2,
-        ),
+        getJob: () => undefined,
+        getReview: api.getReview,
+        getThreads: api.listThreadsForPR,
+        reconcileInterruptedReviews: api.reconcileInterruptedReviews,
       },
-    ],
+    );
+    return {
+      content: [{ type: "text", text: JSON.stringify({ ...review, taskId: work.id }, null, 2) }],
+    };
+  }
+  return {
+    content: [{ type: "text", text: JSON.stringify({ taskId: work.id, result }, null, 2) }],
   };
 }
 
 const server = new Server(
   {
     name: "reviewer-mcp",
-    version: "0.4.2",
+    version: "0.5.0",
   },
   {
     capabilities: {
       tools: {},
+      tasks: { requests: { tools: { call: {} } } },
     },
     instructions:
-      "All review state and threads are local, not GitHub comments. Review lifecycle: call trigger_review once, then await_review once with its durable reviewId. Thread lifecycle: call reply_to_thread or revalidate_thread once, then await_thread_action once with its durable actionId. Never poll, create timers/watchers, or duplicate active work. Treat AI findings as advisory; patch, dismiss, revalidate, or resolve each thread deliberately before a new full review.",
+      "All review state and threads are local, not GitHub comments. trigger_review, reply_to_thread, and revalidate_thread are durable MCP Tasks: call each once and let the MCP host deliver its terminal result. Never call await_review after task-based trigger_review, poll, create timers/watchers, restart Reviewer, or duplicate active work. Treat AI findings as advisory; patch, dismiss, revalidate, or resolve each thread deliberately before a new full review.",
   },
 );
 
@@ -330,41 +309,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         },
       },
       {
-        name: "get_job_status",
-        description:
-          "Legacy non-blocking snapshot for a full review. Do not poll with this tool; call await_review once with the explicit durable reviewId instead.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            jobId: { type: "number" },
-            reviewId: { type: "number" },
-          },
-          anyOf: [{ required: ["jobId"] }, { required: ["reviewId"] }],
-        },
-      },
-      {
-        name: "await_review",
-        description:
-          "Waits once for a review and returns its committed summary and threads immediately on completion. This is the canonical completion path: call it exactly once after trigger_review; do not build timers, poll get_job_status, or re-trigger the review.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            reviewId: { type: "number", description: "The durable ID returned by trigger_review" },
-            timeoutMs: {
-              type: "number",
-              minimum: 1000,
-              maximum: 1260000,
-              description:
-                "Maximum time for this wait call. Defaults to 21 minutes, one minute beyond the enforced total review lifecycle.",
-            },
-          },
-          required: ["reviewId"],
-        },
-      },
-      {
         name: "trigger_review",
         description:
-          "Idempotently starts or joins the one active AI review for a PR and returns its durable reviewId immediately. Then call await_review exactly once; never poll or re-trigger while it is active.",
+          "Runs one durable local AI review as an MCP Task. Reviewer, not this client bridge, owns execution. The host returns the committed summary and local threads on completion; do not call await_review or build a polling loop.",
+        execution: { taskSupport: "required" },
         inputSchema: {
           type: "object",
           properties: {
@@ -380,7 +328,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       {
         name: "reply_to_thread",
         description:
-          "Idempotently starts or joins a durable local AI reply action for a review thread and returns its actionId immediately. Then call await_thread_action once; nothing is posted to GitHub.",
+          "Runs a durable local AI reply as an MCP Task. The host returns the result on completion; nothing is posted to GitHub.",
+        execution: { taskSupport: "required" },
         inputSchema: {
           type: "object",
           properties: {
@@ -393,7 +342,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       {
         name: "revalidate_thread",
         description:
-          "Idempotently starts or joins a durable local AI revalidation action for a thread and returns its actionId immediately. Then call await_thread_action once.",
+          "Runs a durable local AI revalidation as an MCP Task. The host returns the result on completion.",
+        execution: { taskSupport: "required" },
         inputSchema: {
           type: "object",
           properties: {
@@ -413,29 +363,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             threadId: { type: "number" },
           },
           anyOf: [{ required: ["actionId"] }, { required: ["threadId"] }],
-        },
-      },
-      {
-        name: "await_thread_action",
-        description:
-          "Waits once for a durable reply or revalidation action and returns its committed result immediately on completion. Do not poll, create timers, or start another action on the thread.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            actionId: {
-              type: "number",
-              description:
-                "The durable positive ID returned by reply_to_thread or revalidate_thread",
-            },
-            timeoutMs: {
-              type: "number",
-              minimum: 1000,
-              maximum: 1260000,
-              description:
-                "Maximum time for this wait call. Defaults to 21 minutes, one minute beyond the enforced action lifecycle.",
-            },
-          },
-          required: ["actionId"],
         },
       },
       {
@@ -809,7 +736,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
         const resolved = resolveJobStatus(
           { jobId, reviewId: requestedReviewId },
           {
-            getJob: (id) => jobs.get(id),
+            getJob: () => undefined,
             getReview: api.getReview,
             getThreads: api.listThreadsForPR,
             reconcileInterruptedReviews: api.reconcileInterruptedReviews,
@@ -847,6 +774,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
         return { content: [{ type: "text", text: JSON.stringify(resolved, null, 2) }] };
       }
       case "trigger_review": {
+        if (!taskMode(request)) {
+          throw new McpError(ErrorCode.InvalidRequest, "trigger_review requires MCP Task mode.");
+        }
         const { prId, presetId } = z
           .object({ prId: z.number(), presetId: z.number().int().positive().optional() })
           .parse(request.params.arguments);
@@ -859,34 +789,26 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
         if (presetId !== undefined && !preset) {
           throw new McpError(ErrorCode.InvalidParams, `Preset ${presetId} not found`);
         }
-        const providerId = api.resolveReviewerProvider(repo, pr).provider;
-
-        const started = api.startReview({
-          repo,
-          pr,
-          providerId,
-          beforeCreate: preset
-            ? () =>
-                api.setPrReviewConfig(prId, {
-                  categories: preset.categories,
-                  strictness: preset.strictness,
-                  customRules: preset.customRules,
-                })
-            : undefined,
-        });
-        const launched = launchJob(started.completion, {
-          reviewId: started.reviewId,
-          prId,
-        });
-        const payload = JSON.parse(launched.content[0]!.text) as Record<string, unknown>;
-        payload.created = started.created;
-        payload.joined = !started.created;
-        payload.nextAction =
-          "Call await_review once with this reviewId. Do not poll get_job_status or trigger another review.";
-        launched.content[0]!.text = JSON.stringify(payload, null, 2);
-        return launched;
+        api.resolveReviewerProvider(repo, pr);
+        const queued = api.enqueueWork(
+          { kind: "review", prId },
+          {
+            beforeCreate: preset
+              ? () =>
+                  api.setPrReviewConfig(prId, {
+                    categories: preset.categories,
+                    strictness: preset.strictness,
+                    customRules: preset.customRules,
+                  })
+              : undefined,
+          },
+        );
+        return { task: taskFromWork(api.getWorkItem(queued.workId)!) };
       }
       case "reply_to_thread": {
+        if (!taskMode(request)) {
+          throw new McpError(ErrorCode.InvalidRequest, "reply_to_thread requires MCP Task mode.");
+        }
         const { threadId, message } = z
           .object({ threadId: z.number(), message: z.string().min(1) })
           .parse(request.params.arguments);
@@ -895,22 +817,23 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
           | undefined;
         if (!row) throw new McpError(ErrorCode.InvalidParams, "Thread not found");
         const pr = requirePr(row.pr_id);
-        const repo = requireRepo(pr.repo_id);
-        const providerId = api.resolveReviewerProvider(repo, pr).provider;
-        const started = api.startReply({ repo, pr, threadId, userMessage: message, providerId });
-        return threadActionLaunchResponse(started);
+        api.resolveReviewerProvider(requireRepo(pr.repo_id), pr);
+        const queued = api.enqueueWork({ kind: "reply", threadId, message });
+        return { task: taskFromWork(api.getWorkItem(queued.workId)!) };
       }
       case "revalidate_thread": {
+        if (!taskMode(request)) {
+          throw new McpError(ErrorCode.InvalidRequest, "revalidate_thread requires MCP Task mode.");
+        }
         const { threadId } = z.object({ threadId: z.number() }).parse(request.params.arguments);
         const row = api.getDb().prepare("SELECT pr_id FROM threads WHERE id = ?").get(threadId) as
           | { pr_id: number }
           | undefined;
         if (!row) throw new McpError(ErrorCode.InvalidParams, "Thread not found");
         const pr = requirePr(row.pr_id);
-        const repo = requireRepo(pr.repo_id);
-        const providerId = api.resolveReviewerProvider(repo, pr).provider;
-        const started = api.startRevalidate({ repo, pr, threadId, providerId });
-        return threadActionLaunchResponse(started);
+        api.resolveReviewerProvider(requireRepo(pr.repo_id), pr);
+        const queued = api.enqueueWork({ kind: "revalidate", threadId });
+        return { task: taskFromWork(api.getWorkItem(queued.workId)!) };
       }
       case "get_thread_action": {
         const { actionId, threadId } = z
@@ -987,6 +910,28 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
     };
   }
   return { content: [{ type: "text", text: "Success" }] };
+});
+
+server.setRequestHandler(GetTaskRequestSchema, async (request) => {
+  return taskFromWork(api.ensureWorkItemRunning(request.params.taskId));
+});
+
+server.setRequestHandler(GetTaskPayloadRequestSchema, async (request, extra) => {
+  try {
+    await api.waitForWorkItem(request.params.taskId, { signal: extra.signal });
+  } catch (error) {
+    const current = api.getWorkItem(request.params.taskId);
+    if (!current || (current.status !== "error" && current.status !== "cancelled")) throw error;
+    // Terminal errors are represented by the durable task result below.
+  }
+  const work = api.getWorkItem(request.params.taskId);
+  if (!work) throw new McpError(ErrorCode.InvalidParams, "Reviewer task not found.");
+  const result = completedWorkResult(work);
+  result._meta = {
+    ...(result._meta ?? {}),
+    "io.modelcontextprotocol/related-task": { taskId: work.id },
+  };
+  return result;
 });
 
 async function main() {

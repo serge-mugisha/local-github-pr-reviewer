@@ -47,7 +47,9 @@ export type AppConfig = z.infer<typeof ConfigSchema>;
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = resolve(__dirname, "../../..");
-const CONFIG_PATH = resolve(PROJECT_ROOT, "config.json");
+const CONFIG_PATH = process.env.REVIEWER_CONFIG_PATH
+  ? resolve(process.env.REVIEWER_CONFIG_PATH)
+  : resolve(PROJECT_ROOT, "config.json");
 const EXAMPLE_PATH = resolve(PROJECT_ROOT, "config.example.json");
 
 export function loadConfig(): AppConfig {
@@ -70,7 +72,9 @@ export function configPath(): string {
 }
 
 export function dataDir(): string {
-  return resolve(PROJECT_ROOT, "data");
+  return process.env.REVIEWER_DATA_DIR
+    ? resolve(process.env.REVIEWER_DATA_DIR)
+    : resolve(PROJECT_ROOT, "data");
 }
 
 /** Read the on-disk config (or a sensible default if missing). Does NOT

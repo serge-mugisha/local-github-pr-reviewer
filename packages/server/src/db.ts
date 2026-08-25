@@ -112,6 +112,28 @@ export function migrateDatabase(db: Database.Database): void {
       worker_pid INTEGER
     );
 
+    -- Durable execution envelope shared by the UI and every MCP bridge. The
+    -- process accepting a request only enqueues one of these rows; a detached
+    -- Reviewer worker owns the provider CLI and may outlive that request.
+    CREATE TABLE IF NOT EXISTS work_items (
+      id TEXT PRIMARY KEY,
+      kind TEXT NOT NULL,
+      dedupe_key TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      status TEXT NOT NULL,
+      result TEXT,
+      error TEXT,
+      created_at TEXT NOT NULL,
+      started_at TEXT,
+      heartbeat_at TEXT,
+      finished_at TEXT,
+      worker_token TEXT,
+      worker_pid INTEGER,
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      launch_count INTEGER NOT NULL DEFAULT 0,
+      last_launch_at TEXT
+    );
+
     CREATE TABLE IF NOT EXISTS skills (
       repo_id INTEGER PRIMARY KEY REFERENCES repos(id) ON DELETE CASCADE,
       body TEXT NOT NULL DEFAULT '',
@@ -175,6 +197,7 @@ export function migrateDatabase(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_threads_pr ON threads(pr_id);
     CREATE INDEX IF NOT EXISTS idx_comments_thread ON comments(thread_id);
     CREATE INDEX IF NOT EXISTS idx_thread_actions_thread ON thread_actions(thread_id);
+    CREATE INDEX IF NOT EXISTS idx_work_items_status ON work_items(status);
     CREATE INDEX IF NOT EXISTS idx_prs_repo ON prs(repo_id);
     CREATE INDEX IF NOT EXISTS idx_ai_sessions_pr ON ai_sessions(pr_id);
   `);
@@ -202,6 +225,10 @@ export function migrateDatabase(db: Database.Database): void {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_thread_actions_one_running_per_thread
       ON thread_actions(thread_id)
       WHERE status = 'running';
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_work_items_one_active_dedupe
+      ON work_items(dedupe_key)
+      WHERE status IN ('queued', 'running');
   `);
 
     const reviewColumns = db.pragma("table_info(reviews)") as { name: string }[];
@@ -219,6 +246,14 @@ export function migrateDatabase(db: Database.Database): void {
     }
     if (!reviewColumns.some((column) => column.name === "stale_marked")) {
       db.exec("ALTER TABLE reviews ADD COLUMN stale_marked INTEGER");
+    }
+
+    const workColumns = db.pragma("table_info(work_items)") as { name: string }[];
+    if (!workColumns.some((column) => column.name === "launch_count")) {
+      db.exec("ALTER TABLE work_items ADD COLUMN launch_count INTEGER NOT NULL DEFAULT 0");
+    }
+    if (!workColumns.some((column) => column.name === "last_launch_at")) {
+      db.exec("ALTER TABLE work_items ADD COLUMN last_launch_at TEXT");
     }
 
     const repoColumns = db.pragma("table_info(repos)") as { name: string }[];
@@ -324,6 +359,24 @@ export interface ThreadActionRow {
   error: string | null;
   worker_token: string | null;
   worker_pid: number | null;
+}
+export interface WorkItemRow {
+  id: string;
+  kind: "review" | "reply" | "revalidate";
+  dedupe_key: string;
+  payload: string;
+  status: "queued" | "running" | "done" | "error" | "cancelled";
+  result: string | null;
+  error: string | null;
+  created_at: string;
+  started_at: string | null;
+  heartbeat_at: string | null;
+  finished_at: string | null;
+  worker_token: string | null;
+  worker_pid: number | null;
+  attempt_count: number;
+  launch_count: number;
+  last_launch_at: string | null;
 }
 export interface AiSessionRow {
   id: number;

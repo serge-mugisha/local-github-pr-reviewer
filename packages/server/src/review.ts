@@ -27,21 +27,19 @@ function now(): string {
   return new Date().toISOString();
 }
 
-const DURABLE_HEARTBEAT_MS = 5_000;
-const DURABLE_STALE_AFTER_MS = 30_000;
-const DURABLE_HARD_STALE_AFTER_MS = 20 * 60 * 1_000;
+const configuredHeartbeatMs = Number(process.env.REVIEWER_HEARTBEAT_MS);
+const DURABLE_HEARTBEAT_MS =
+  Number.isFinite(configuredHeartbeatMs) && configuredHeartbeatMs >= 25
+    ? configuredHeartbeatMs
+    : 5_000;
+const configuredStaleAfterMs = Number(process.env.REVIEWER_STALE_AFTER_MS);
+const DURABLE_STALE_AFTER_MS =
+  Number.isFinite(configuredStaleAfterMs) && configuredStaleAfterMs >= 250
+    ? configuredStaleAfterMs
+    : 30_000;
 const DURABLE_EXECUTION_TIMEOUT_MS = 20 * 60 * 1_000;
 const DURABLE_WAIT_TIMEOUT_MS = 21 * 60 * 1_000;
 const DURABLE_POLL_INTERVAL_MS = 250;
-
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 function reconcileInterruptedWork(
   db: Database.Database,
@@ -50,7 +48,6 @@ function reconcileInterruptedWork(
 ): number {
   const finishedAt = now();
   const staleBefore = new Date(Date.now() - DURABLE_STALE_AFTER_MS).toISOString();
-  const hardStaleBefore = new Date(Date.now() - DURABLE_HARD_STALE_AFTER_MS).toISOString();
   const candidates = db
     .prepare(
       `SELECT id, worker_pid, heartbeat_at
@@ -70,17 +67,9 @@ function reconcileInterruptedWork(
   );
   let changed = 0;
   for (const review of candidates) {
-    // Laptop sleep pauses the worker and its heartbeat together. A living
-    // owner PID is stronger liveness evidence than the clock until the hard
-    // ceiling, after which a wedged process may be safely fenced and replaced.
-    if (
-      review.worker_pid !== null &&
-      isProcessAlive(review.worker_pid) &&
-      review.heartbeat_at !== null &&
-      review.heartbeat_at >= hardStaleBefore
-    ) {
-      continue;
-    }
+    // Heartbeat leases, not PIDs, define ownership. PIDs can be reused and a
+    // live process can be wedged forever. Fencing a paused worker is safe: its
+    // token can no longer publish when it resumes.
     changed += interrupt.run(finishedAt, interruptedMessage, review.id).changes;
   }
   return changed;
@@ -329,10 +318,14 @@ async function completeReview(
   const heartbeat = db.prepare(
     "UPDATE reviews SET heartbeat_at = ? WHERE id = ? AND worker_token = ? AND status = 'running'",
   );
-  const heartbeatTimer = setInterval(
-    () => heartbeat.run(now(), reviewId, workerToken),
-    DURABLE_HEARTBEAT_MS,
-  );
+  const heartbeatTimer = setInterval(() => {
+    try {
+      heartbeat.run(now(), reviewId, workerToken);
+    } catch {
+      // Transient DB contention must not terminate provider execution. The
+      // lease and fenced terminal update still make prolonged failure safe.
+    }
+  }, DURABLE_HEARTBEAT_MS);
 
   const reviewFinish = db.prepare(`
     UPDATE reviews
@@ -661,10 +654,13 @@ function startThreadAction<T>(args: {
   const heartbeat = db.prepare(
     "UPDATE thread_actions SET heartbeat_at = ? WHERE id = ? AND worker_token = ? AND status = 'running'",
   );
-  const heartbeatTimer = setInterval(
-    () => heartbeat.run(now(), claim.actionId, claim.workerToken),
-    DURABLE_HEARTBEAT_MS,
-  );
+  const heartbeatTimer = setInterval(() => {
+    try {
+      heartbeat.run(now(), claim.actionId, claim.workerToken);
+    } catch {
+      // See review heartbeat above: lease expiry is the safety mechanism.
+    }
+  }, DURABLE_HEARTBEAT_MS);
   const finish = db.prepare(
     `UPDATE thread_actions
      SET status = ?, result = ?, finished_at = ?, error = ?

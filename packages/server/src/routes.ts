@@ -36,14 +36,8 @@ import {
 } from "./reviewConfig.js";
 import { catalogForClient } from "./reviewCatalog.js";
 import { buildReviewInstructions } from "./providers/prompt.js";
-import {
-  runReview,
-  startReply,
-  startRevalidate,
-  setThreadStatus,
-  reconcileInterruptedReviews,
-  getLatestReviewForPR,
-} from "./review.js";
+import { setThreadStatus, reconcileInterruptedReviews, getLatestReviewForPR } from "./review.js";
+import { enqueueWork, waitForWorkItem } from "./workQueue.js";
 import * as gh from "./github.js";
 import { listProviders, listProviderStatus, getProvider } from "./providers/index.js";
 import { getSettings, setProvider } from "./settings.js";
@@ -455,12 +449,12 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     sseSend(reply, "log", { message: `starting review with ${providerId}…` });
 
     try {
-      const result = await runReview({
-        repo,
-        pr,
-        providerId,
-        onProgress: (e) => sseSend(reply, e.type, e),
+      const queued = enqueueWork({ kind: "review", prId });
+      sseSend(reply, "log", {
+        message: `${queued.created ? "queued" : "joined"} durable review task ${queued.workId}`,
       });
+      const work = await waitForWorkItem(queued.workId);
+      const result = JSON.parse(work.result ?? "null");
       sseSend(reply, "done", result);
     } catch (e) {
       sseSend(reply, "error", { message: (e as Error).message });
@@ -487,23 +481,14 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     sseSend(reply, "log", { message: `replying with ${providerId}…` });
     let inputPersisted = false;
     try {
-      const started = startReply({
-        repo,
-        pr,
-        threadId,
-        userMessage: body.body,
-        providerId,
-        onProgress: (e) => sseSend(reply, e.type, e),
-      });
-      // Creators persist in the claim transaction; joiners attach only to an
-      // action with this exact input, so both cases already have the message.
+      const queued = enqueueWork({ kind: "reply", threadId, message: body.body });
+      // The durable work envelope persists the user's input before execution.
       inputPersisted = true;
-      if (!started.created) {
-        sseSend(reply, "log", {
-          message: `attached to active reply action ${started.actionId}; waiting for its result…`,
-        });
-      }
-      const result = await started.completion;
+      sseSend(reply, "log", {
+        message: `${queued.created ? "queued" : "joined"} durable reply task ${queued.workId}`,
+      });
+      const work = await waitForWorkItem(queued.workId);
+      const result = JSON.parse(work.result ?? "null");
       sseSend(reply, "done", result);
     } catch (e) {
       sseSend(reply, "error", { message: (e as Error).message, inputPersisted });
@@ -527,19 +512,12 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     sseInit(reply);
     sseSend(reply, "log", { message: `revalidating with ${providerId}…` });
     try {
-      const started = startRevalidate({
-        repo,
-        pr,
-        threadId,
-        providerId,
-        onProgress: (e) => sseSend(reply, e.type, e),
+      const queued = enqueueWork({ kind: "revalidate", threadId });
+      sseSend(reply, "log", {
+        message: `${queued.created ? "queued" : "joined"} durable revalidation task ${queued.workId}`,
       });
-      if (!started.created) {
-        sseSend(reply, "log", {
-          message: `attached to active revalidation action ${started.actionId}; waiting for its result…`,
-        });
-      }
-      const result = await started.completion;
+      const work = await waitForWorkItem(queued.workId);
+      const result = JSON.parse(work.result ?? "null");
       sseSend(reply, "done", result);
     } catch (e) {
       sseSend(reply, "error", { message: (e as Error).message });

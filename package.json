@@ -1,6 +1,6 @@
 {
   "name": "local-github-pr-reviewer",
-  "version": "0.4.2",
+  "version": "0.5.0",
   "description": "A local, read-only GitHub PR reviewer that uses your AI CLI of choice (Claude, Antigravity, Codex) to comment on diffs and chat about them — without ever writing back to GitHub.",
   "license": "MIT",
   "author": "Serge Mugisha",
@@ -43,8 +43,9 @@
     "format": "prettier --write \"**/*.{ts,tsx,js,mjs,json,md,css,html}\"",
     "format:check": "prettier --check \"**/*.{ts,tsx,js,mjs,json,md,css,html}\"",
     "test": "vitest run",
+    "test:task-lifecycle": "node scripts/test-mcp-task-lifecycle.mjs",
     "test:watch": "vitest",
-    "ci": "npm run lint && npm run format:check && npm run build && npm run typecheck && npm run test"
+    "ci": "npm run lint && npm run format:check && npm run build && npm run typecheck && npm run test && npm run test:task-lifecycle"
   },
   "devDependencies": {
     "@eslint/js": "^9.16.0",
