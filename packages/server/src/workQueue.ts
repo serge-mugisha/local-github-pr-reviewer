@@ -147,9 +147,17 @@ export function resolveWorkerLaunch(
     return { command: process.execPath, args: [compiledWorkerEntrypoint, workId] };
   }
   if (fileExists(sourceWorkerEntrypoint)) {
+    let tsxCli: string;
+    try {
+      tsxCli = requireFromHere.resolve("tsx/cli");
+    } catch {
+      throw new Error(
+        "Reviewer source worker requires installed dependencies. Run npm install, or npm run build before starting Reviewer.",
+      );
+    }
     return {
       command: process.execPath,
-      args: [requireFromHere.resolve("tsx/cli"), sourceWorkerEntrypoint, workId],
+      args: [tsxCli, sourceWorkerEntrypoint, workId],
     };
   }
   throw new Error(

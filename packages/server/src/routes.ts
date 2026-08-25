@@ -67,6 +67,13 @@ function sseEnd(reply: FastifyReply): void {
   reply.raw.end();
 }
 
+function sseProgress(
+  reply: FastifyReply,
+  event: { type: "log" | "stdout" | "stderr"; data: string },
+): void {
+  sseSend(reply, event.type, event.type === "log" ? { message: event.data } : event);
+}
+
 function requireRepo(repoId: number): RepoRow {
   const r = getRepo(repoId);
   if (!r) throw new Error(`repo ${repoId} not found`);
@@ -454,7 +461,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
         message: `${queued.created ? "queued" : "joined"} durable review task ${queued.workId}`,
       });
       const work = await waitForWorkItem(queued.workId, {
-        onEvent: (event) => sseSend(reply, event.type, event),
+        onEvent: (event) => sseProgress(reply, event),
       });
       const result = JSON.parse(work.result ?? "null");
       sseSend(reply, "done", result);
@@ -490,7 +497,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
         message: `${queued.created ? "queued" : "joined"} durable reply task ${queued.workId}`,
       });
       const work = await waitForWorkItem(queued.workId, {
-        onEvent: (event) => sseSend(reply, event.type, event),
+        onEvent: (event) => sseProgress(reply, event),
       });
       const result = JSON.parse(work.result ?? "null");
       sseSend(reply, "done", result);
@@ -521,7 +528,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
         message: `${queued.created ? "queued" : "joined"} durable revalidation task ${queued.workId}`,
       });
       const work = await waitForWorkItem(queued.workId, {
-        onEvent: (event) => sseSend(reply, event.type, event),
+        onEvent: (event) => sseProgress(reply, event),
       });
       const result = JSON.parse(work.result ?? "null");
       sseSend(reply, "done", result);
