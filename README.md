@@ -188,9 +188,11 @@ tool_timeout_sec = 1800
 ```
 
 Some embedded hosts impose their own non-configurable request cap. If a host reports a transport
-timeout, the detached work continues: retry `trigger_review` once with identical arguments to join
-the active item. For a timed-out reply or revalidation, inspect `get_thread_action` once before any
-retry so an already-completed reply is not duplicated. Do not create a polling loop.
+timeout, the detached work continues. Inspect `get_review_threads` once: use the committed result
+if the expected head completed, or retry `trigger_review` once with identical arguments only when
+the review is still running or no review was enqueued. For a timed-out reply or revalidation,
+inspect `get_thread_action` once before any retry so an already-completed reply is not duplicated.
+Do not create a polling loop.
 
 **For Antigravity** (`.gemini/config/config.json`):
 
