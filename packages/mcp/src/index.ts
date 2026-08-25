@@ -91,18 +91,26 @@ async function waitForLegacyWork(
     }): Promise<void>;
   },
 ): Promise<CallToolResult> {
-  const work = await api.waitForWorkItem(workId, {
-    signal: extra.signal,
-    onProgress: createDurableProgressReporter(
-      {
-        signal: extra.signal,
-        progressToken: request.params._meta?.progressToken,
-        sendProgress: (params) =>
-          extra.sendNotification({ method: "notifications/progress", params }),
-      },
-      label,
-    ),
-  });
+  try {
+    await api.waitForWorkItem(workId, {
+      signal: extra.signal,
+      timeoutMs: null,
+      onProgress: createDurableProgressReporter(
+        {
+          signal: extra.signal,
+          progressToken: request.params._meta?.progressToken,
+          sendProgress: (params) =>
+            extra.sendNotification({ method: "notifications/progress", params }),
+        },
+        label,
+      ),
+    });
+  } catch (error) {
+    const current = api.getWorkItem(workId);
+    if (!current || (current.status !== "error" && current.status !== "cancelled")) throw error;
+  }
+  const work = api.getWorkItem(workId);
+  if (!work) throw new McpError(ErrorCode.InvalidParams, "Reviewer task not found.");
   return completedWorkResult(work);
 }
 

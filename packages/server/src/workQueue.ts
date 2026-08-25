@@ -338,13 +338,14 @@ export async function waitForWorkItem(
   workId: string,
   options: {
     signal?: AbortSignal;
-    timeoutMs?: number;
+    /** Null waits until completion or caller cancellation. */
+    timeoutMs?: number | null;
     onEvent?: (event: WorkEvent) => void;
     onProgress?: (work: WorkItemRow) => void;
   } = {},
 ): Promise<WorkItemRow> {
   const started = Date.now();
-  const timeoutMs = options.timeoutMs ?? 21 * 60 * 1_000;
+  const timeoutMs = options.timeoutMs === undefined ? 21 * 60 * 1_000 : options.timeoutMs;
   let eventCursor = 0;
   for (;;) {
     const work = ensureWorkItemRunning(workId);
@@ -357,7 +358,7 @@ export async function waitForWorkItem(
     if (work.status === "error" || work.status === "cancelled") {
       throw new Error(work.error ?? `Reviewer work item ${workId} failed.`);
     }
-    if (Date.now() - started >= timeoutMs) {
+    if (timeoutMs !== null && Date.now() - started >= timeoutMs) {
       throw new Error(`Timed out waiting for Reviewer work item ${workId}.`);
     }
     await new Promise<void>((resolve, reject) => {

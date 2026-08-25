@@ -18,6 +18,7 @@ const remotePath = join(root, "remote.git");
 const binPath = join(root, "bin");
 const dataPath = join(root, "data");
 const configPath = join(root, "config.json");
+const providerFailurePath = join(root, "provider-failure");
 
 function run(command, args, cwd = root) {
   const result = spawnSync(command, args, { cwd, encoding: "utf8" });
@@ -102,6 +103,11 @@ if (args[0] === 'pr' && args[1] === 'view') {
 }
 `;
   const claudeScript = `#!/usr/bin/env node
+const { existsSync } = require('node:fs')
+if (process.env.TEST_PROVIDER_FAILURE && existsSync(process.env.TEST_PROVIDER_FAILURE)) {
+  process.stderr.write('intentional provider failure')
+  process.exit(2)
+}
 process.stdin.resume()
 setTimeout(() => process.stdout.write(JSON.stringify({result:JSON.stringify({summary:'bridge-independent success',comments:[]}),session_id:'task-lifecycle-session'})), 2500)
 `;
@@ -128,6 +134,7 @@ setTimeout(() => process.stdout.write(JSON.stringify({result:JSON.stringify({sum
     REVIEWER_HEARTBEAT_MS: "100",
     TEST_HEAD_SHA: headSha,
     TEST_BASE_SHA: baseSha,
+    TEST_PROVIDER_FAILURE: providerFailurePath,
   };
   Object.assign(process.env, env);
   const api = await import("../packages/server/dist/api.js");
@@ -173,6 +180,28 @@ setTimeout(() => process.stdout.write(JSON.stringify({result:JSON.stringify({sum
     throw new Error(`Legacy work was not completed exactly once: ${JSON.stringify(legacyWork)}`);
   }
   process.stdout.write(`Legacy MCP call completed with durable progress: ${legacyWork.id}\n`);
+
+  await writeFile(providerFailurePath, "fail\n");
+  const failingLegacy = await makeLegacyClient(env, () => {});
+  const failedResult = await failingLegacy.request(
+    {
+      method: "tools/call",
+      params: { name: "trigger_review", arguments: { prId: 1 } },
+    },
+    CallToolResultSchema,
+  );
+  await failingLegacy.close();
+  await rm(providerFailurePath);
+  if (!failedResult.isError) {
+    throw new Error(
+      `Legacy terminal failure was not a structured tool error: ${JSON.stringify(failedResult)}`,
+    );
+  }
+  const failureText = failedResult.content?.find((item) => item.type === "text")?.text ?? "";
+  if (!failureText.includes("intentional provider failure")) {
+    throw new Error(`Legacy terminal failure lost its cause: ${JSON.stringify(failedResult)}`);
+  }
+  process.stdout.write("Legacy MCP call returned a structured terminal failure\n");
 
   const first = await makeClient(env);
   const startedAt = Date.now();

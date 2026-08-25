@@ -48,7 +48,10 @@ beforeEach(() => {
   });
 });
 
-afterEach(() => mocks.db.close());
+afterEach(() => {
+  vi.restoreAllMocks();
+  mocks.db.close();
+});
 
 describe("durable Reviewer work queue", () => {
   it("deduplicates active requests before launching detached workers", () => {
@@ -105,6 +108,21 @@ describe("durable Reviewer work queue", () => {
 
     expect(states[0]).toBe("running");
     expect(states.at(-1)).toBe("done");
+  });
+
+  it("allows a durable caller to wait without the default deadline", async () => {
+    const dateNow = vi.spyOn(Date, "now");
+    dateNow.mockReturnValue(0);
+    const queued = enqueueWork({ kind: "review", prId: 19 });
+    const claim = claimWorkItem(queued.workId)!;
+    const waiting = waitForWorkItem(queued.workId, { timeoutMs: null });
+
+    dateNow.mockReturnValue(22 * 60 * 1_000);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    completeWorkItem(queued.workId, claim.workerToken, {});
+
+    await expect(waiting).resolves.toMatchObject({ status: "done" });
+    dateNow.mockRestore();
   });
 
   it("allows only one process to claim and publish a queued item", () => {
