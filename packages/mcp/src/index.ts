@@ -16,6 +16,7 @@ import { resolveJobStatus } from "./jobStatus.js";
 import { collectViewerPrs } from "./prDiscovery.js";
 import { handleAwaitReview } from "./awaitReview.js";
 import { handleAwaitThreadAction } from "./awaitThreadAction.js";
+import { createDurableProgressReporter } from "./progress.js";
 import { resolveThreadActionStatus, selectThreadAction } from "./threadActionStatus.js";
 
 const TASK_TTL_MS = 24 * 60 * 60 * 1_000;
@@ -78,10 +79,37 @@ function completedWorkResult(work: api.WorkItemRow): CallToolResult {
   };
 }
 
+async function waitForLegacyWork(
+  workId: string,
+  label: string,
+  request: { params: { _meta?: { progressToken?: string | number } } },
+  extra: {
+    signal: AbortSignal;
+    sendNotification(params: {
+      method: "notifications/progress";
+      params: { progressToken: string | number; progress: number; message: string };
+    }): Promise<void>;
+  },
+): Promise<CallToolResult> {
+  const work = await api.waitForWorkItem(workId, {
+    signal: extra.signal,
+    onProgress: createDurableProgressReporter(
+      {
+        signal: extra.signal,
+        progressToken: request.params._meta?.progressToken,
+        sendProgress: (params) =>
+          extra.sendNotification({ method: "notifications/progress", params }),
+      },
+      label,
+    ),
+  });
+  return completedWorkResult(work);
+}
+
 const server = new Server(
   {
     name: "reviewer-mcp",
-    version: "0.5.0",
+    version: "0.5.1",
   },
   {
     capabilities: {
@@ -89,7 +117,7 @@ const server = new Server(
       tasks: { requests: { tools: { call: {} } } },
     },
     instructions:
-      "All review state and threads are local, not GitHub comments. trigger_review, reply_to_thread, and revalidate_thread are durable MCP Tasks: call each once and let the MCP host deliver its terminal result. Never call await_review after task-based trigger_review, poll, create timers/watchers, restart Reviewer, or duplicate active work. Treat AI findings as advisory; patch, dismiss, revalidate, or resolve each thread deliberately before a new full review.",
+      "All review state and threads are local, not GitHub comments. trigger_review, reply_to_thread, and revalidate_thread are durable operations: call each once and let that call deliver its terminal result. Task-capable hosts receive an MCP Task; legacy hosts receive a progress-kept call backed by the same detached work item. Never poll, create timers/watchers, restart Reviewer, or duplicate active work. Treat AI findings as advisory; patch, dismiss, revalidate, or resolve each thread deliberately before a new full review.",
   },
 );
 
@@ -311,8 +339,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       {
         name: "trigger_review",
         description:
-          "Runs one durable local AI review as an MCP Task. Reviewer, not this client bridge, owns execution. The host returns the committed summary and local threads on completion; do not call await_review or build a polling loop.",
-        execution: { taskSupport: "required" },
+          "Runs one durable local AI review. Task-capable hosts receive an MCP Task; legacy hosts keep this call open with progress until the detached worker commits the summary and local threads. Call once and use its terminal result; do not poll or call await_review.",
+        execution: { taskSupport: "optional" },
         inputSchema: {
           type: "object",
           properties: {
@@ -328,8 +356,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       {
         name: "reply_to_thread",
         description:
-          "Runs a durable local AI reply as an MCP Task. The host returns the result on completion; nothing is posted to GitHub.",
-        execution: { taskSupport: "required" },
+          "Runs a durable local AI reply. Task-capable hosts receive an MCP Task; legacy hosts keep this call open with progress until completion. Nothing is posted to GitHub.",
+        execution: { taskSupport: "optional" },
         inputSchema: {
           type: "object",
           properties: {
@@ -342,8 +370,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       {
         name: "revalidate_thread",
         description:
-          "Runs a durable local AI revalidation as an MCP Task. The host returns the result on completion.",
-        execution: { taskSupport: "required" },
+          "Runs a durable local AI revalidation. Task-capable hosts receive an MCP Task; legacy hosts keep this call open with progress until completion.",
+        execution: { taskSupport: "optional" },
         inputSchema: {
           type: "object",
           properties: {
@@ -774,9 +802,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
         return { content: [{ type: "text", text: JSON.stringify(resolved, null, 2) }] };
       }
       case "trigger_review": {
-        if (!taskMode(request)) {
-          throw new McpError(ErrorCode.InvalidRequest, "trigger_review requires MCP Task mode.");
-        }
         const { prId, presetId } = z
           .object({ prId: z.number(), presetId: z.number().int().positive().optional() })
           .parse(request.params.arguments);
@@ -803,12 +828,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
               : undefined,
           },
         );
-        return { task: taskFromWork(api.getWorkItem(queued.workId)!) };
+        if (taskMode(request)) return { task: taskFromWork(api.getWorkItem(queued.workId)!) };
+        return waitForLegacyWork(queued.workId, "Review", request, extra);
       }
       case "reply_to_thread": {
-        if (!taskMode(request)) {
-          throw new McpError(ErrorCode.InvalidRequest, "reply_to_thread requires MCP Task mode.");
-        }
         const { threadId, message } = z
           .object({ threadId: z.number(), message: z.string().min(1) })
           .parse(request.params.arguments);
@@ -819,12 +842,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
         const pr = requirePr(row.pr_id);
         api.resolveReviewerProvider(requireRepo(pr.repo_id), pr);
         const queued = api.enqueueReplyWork(threadId, message, pr.head_sha);
-        return { task: taskFromWork(api.getWorkItem(queued.workId)!) };
+        if (taskMode(request)) return { task: taskFromWork(api.getWorkItem(queued.workId)!) };
+        return waitForLegacyWork(queued.workId, "Thread reply", request, extra);
       }
       case "revalidate_thread": {
-        if (!taskMode(request)) {
-          throw new McpError(ErrorCode.InvalidRequest, "revalidate_thread requires MCP Task mode.");
-        }
         const { threadId } = z.object({ threadId: z.number() }).parse(request.params.arguments);
         const row = api.getDb().prepare("SELECT pr_id FROM threads WHERE id = ?").get(threadId) as
           | { pr_id: number }
@@ -833,7 +854,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
         const pr = requirePr(row.pr_id);
         api.resolveReviewerProvider(requireRepo(pr.repo_id), pr);
         const queued = api.enqueueWork({ kind: "revalidate", threadId });
-        return { task: taskFromWork(api.getWorkItem(queued.workId)!) };
+        if (taskMode(request)) return { task: taskFromWork(api.getWorkItem(queued.workId)!) };
+        return waitForLegacyWork(queued.workId, "Thread revalidation", request, extra);
       }
       case "get_thread_action": {
         const { actionId, threadId } = z

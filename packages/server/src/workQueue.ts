@@ -340,6 +340,7 @@ export async function waitForWorkItem(
     signal?: AbortSignal;
     timeoutMs?: number;
     onEvent?: (event: WorkEvent) => void;
+    onProgress?: (work: WorkItemRow) => void;
   } = {},
 ): Promise<WorkItemRow> {
   const started = Date.now();
@@ -347,6 +348,7 @@ export async function waitForWorkItem(
   let eventCursor = 0;
   for (;;) {
     const work = ensureWorkItemRunning(workId);
+    options.onProgress?.(work);
     for (const row of listWorkEvents(workId, eventCursor)) {
       eventCursor = row.id;
       options.onEvent?.(JSON.parse(row.event) as WorkEvent);

@@ -13,6 +13,7 @@ import {
   pruneFinishedWorkEvents,
   reconcileInterruptedWorkItems,
   resolveWorkerLaunch,
+  waitForWorkItem,
 } from "./workQueue.js";
 
 const mocks = vi.hoisted(() => ({
@@ -89,6 +90,21 @@ describe("durable Reviewer work queue", () => {
         event: JSON.stringify({ type: "stderr", data: "reviewing file.ts" }),
       }),
     ]);
+  });
+
+  it("reports durable work state while a caller waits", async () => {
+    const queued = enqueueWork({ kind: "review", prId: 18 });
+    const claim = claimWorkItem(queued.workId)!;
+    const states: string[] = [];
+    const waiting = waitForWorkItem(queued.workId, {
+      onProgress: (work) => states.push(work.status),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    completeWorkItem(queued.workId, claim.workerToken, {});
+    await waiting;
+
+    expect(states[0]).toBe("running");
+    expect(states.at(-1)).toBe("done");
   });
 
   it("allows only one process to claim and publish a queued item", () => {

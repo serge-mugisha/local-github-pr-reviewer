@@ -11,16 +11,14 @@ export interface DurableProgressContext {
 export function createDurableProgressReporter(
   context: DurableProgressContext,
   label: string,
-): (work: { id: number; started_at: string }) => void {
+): (work: { id: number | string; started_at: string | null; created_at?: string }) => void {
   let lastProgressAt = 0;
   return (work) => {
     const timestamp = Date.now();
     if (context.progressToken === undefined || timestamp - lastProgressAt < 10_000) return;
     lastProgressAt = timestamp;
-    const elapsedSeconds = Math.max(
-      0,
-      Math.round((timestamp - Date.parse(work.started_at)) / 1_000),
-    );
+    const beganAt = work.started_at ?? work.created_at ?? new Date(timestamp).toISOString();
+    const elapsedSeconds = Math.max(0, Math.round((timestamp - Date.parse(beganAt)) / 1_000));
     void Promise.resolve(
       context.sendProgress({
         progressToken: context.progressToken,

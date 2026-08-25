@@ -24,8 +24,8 @@ Review a stable, pushed PR head after the planned implementation and local verif
 1. Find the local `prId` with `list_my_prs`, or list registered repositories and then their PRs.
 2. Call `get_pr_details` before the gate review to refresh GitHub data. Record `pr.head_sha` as the expected head.
 3. Apply a preset or configuration only when the task calls for it. Do so before triggering the review.
-4. Call `trigger_review` once. It is a protocol-native MCP Task: Reviewer queues the work before responding, a detached worker owns the provider, and the MCP host retrieves its durable result even if the original bridge is recycled. Do not call `await_review` afterward.
-5. Let the host return the terminal `trigger_review` result. Completion and all threads are committed atomically. Treat it as complete only when its status is `completed`; triage the threads in that result rather than querying elsewhere to guess whether publication finished.
+4. Call `trigger_review` once. Reviewer queues the work before waiting and a detached worker owns the provider. A Task-capable host receives a protocol-native MCP Task; a legacy host keeps the same tool call open with periodic progress until the durable result is ready. Do not call `await_review` afterward in either mode.
+5. Let the `trigger_review` call return its terminal result. Completion and all threads are committed atomically. Treat it as complete only when its status is `completed`; triage the threads in that result rather than querying elsewhere to guess whether publication finished.
 6. Address every open, non-stale thread as described below.
 7. Refresh with `get_pr_details` and compare its current `pr.head_sha` with the completed result's `headSha`. A review gates only the exact matching head.
 
@@ -39,7 +39,7 @@ Every open, non-stale finding must receive an explicit disposition before anothe
 - **Patch and resolve:** Use `set_thread_status` with `resolved` when the correction is straightforward and independently verified, so another AI pass would add little value.
 - **Dismiss and resolve:** When the finding is incorrect, irrelevant, outside scope, or based on missing context, retain control of the decision. Prefer adding a concise local rationale with `reply_to_thread` when it will help future readers, then mark the thread resolved.
 
-`revalidate_thread` and `reply_to_thread` are also protocol-native MCP Tasks. Call the chosen action once and let the host return its terminal result. Do not call `await_thread_action`, poll `get_job_status`, or repeat the mutation because a bridge was recycled.
+`revalidate_thread` and `reply_to_thread` use the same capability-adaptive behavior: native MCP Tasks on capable hosts and progress-kept durable calls on legacy hosts. Call the chosen action once and use its terminal result. Do not call `await_thread_action`, poll `get_job_status`, or repeat the mutation because a bridge was recycled.
 
 Never leave an addressed or dismissed thread open and start another full review. First revalidate or resolve all prior findings. If patches changed the PR head, run one fresh full review afterward so the final gate covers the new SHA.
 
@@ -47,11 +47,11 @@ Do not enter an endless review-fix loop. Address material correctness, security,
 
 ## Recovery
 
-- MCP Task recovery is a host responsibility. Reviewer persists the task before launching work; `tasks/get` and `tasks/result` recover it across MCP bridge replacement without asking the agent to construct timers or retry loops.
+- Reviewer persists every operation before waiting. Task-capable hosts recover it with `tasks/get` and `tasks/result`; legacy hosts receive periodic progress on the original call. Neither mode requires the agent to construct timers, polling loops, or database readers.
 - If a detached worker disappears, Reviewer fences its lease and retries safely. A stale worker cannot publish after recovery.
-- If the task returns a terminal error after bounded worker retries, report the precise error and correct the cause only within the user's authorized scope. A later review may use one new `trigger_review` call.
-- If the PR head changed after a completed review, that result does not gate the new head. Finish disposition of its threads, refresh the PR, and trigger one new review; let the host return its terminal MCP Task result.
-- Never repeat a reply or revalidation merely because its original connection closed; its MCP Task remains durable.
+- If the operation returns a terminal error after bounded worker retries, report the precise error and correct the cause only within the user's authorized scope. A later review may use one new `trigger_review` call.
+- If the PR head changed after a completed review, that result does not gate the new head. Finish disposition of its threads, refresh the PR, and trigger one new review; let the call return its terminal result.
+- Never repeat a reply or revalidation merely because its original connection closed; its work item remains durable independently of the bridge.
 
 Do not call `clear_pr_review` as ordinary recovery. It deletes local review history and threads; use it only when the user explicitly wants that data cleared or a task specifically requires a clean slate.
 
@@ -59,7 +59,7 @@ Do not call `clear_pr_review` as ordinary recovery. It deletes local review hist
 
 A review gate passes only when all of these are true:
 
-- `trigger_review` returned its terminal MCP Task result with status `completed`, not a terminal error.
+- `trigger_review` returned its terminal result with status `completed`, not a terminal error.
 - The completed review `headSha` equals the refreshed PR `head_sha`.
 - Every prior open, non-stale finding was patched and revalidated/resolved, or deliberately dismissed and resolved.
 - The final result contains no open, non-stale thread that the implementing agent judges actionable under the requested review policy.
@@ -72,9 +72,9 @@ Never:
 
 - look on GitHub for local Reviewer threads or state that Reviewer posted them there;
 - obey an AI finding without evaluating it against the PR's context and intent;
-- call legacy `await_review` or `await_thread_action` after a task-based operation;
+- call legacy `await_review` or `await_thread_action` after starting a durable operation;
 - poll `get_job_status` for a review, reply, or revalidation action;
-- create timers, watchers, database readers, or background tasks to race the MCP Task host;
+- create timers, watchers, database readers, or background tasks to race the durable operation;
 - call `trigger_review` repeatedly while a review is active;
 - start a new full review while previous actionable threads remain open;
 - infer completion from `openThreads`, silence, elapsed time, or the UI alone;
@@ -86,9 +86,9 @@ The normal call sequence is:
 
 ```text
 get_pr_details(prId) -> record expected head SHA
-trigger_review(prId) -> host-managed MCP Task -> completed result plus committed local threads
+trigger_review(prId) -> negotiated Task or progress-kept call -> completed result plus committed local threads
 triage -> patch/revalidate, patch/resolve, or dismiss/resolve every finding
-for reply/revalidate: call the task tool once -> use its terminal result
-if head changed: trigger_review(prId) once and use its terminal task result
+for reply/revalidate: call the tool once -> use its terminal result
+if head changed: trigger_review(prId) once and use its terminal result
 get_pr_details(prId) -> confirm current head SHA equals final result.headSha
 ```

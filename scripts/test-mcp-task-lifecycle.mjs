@@ -5,9 +5,11 @@ import { spawnSync } from "node:child_process";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import {
+  CallToolResultSchema,
   CreateTaskResultSchema,
   GetTaskPayloadResultSchema,
   GetTaskResultSchema,
+  ProgressNotificationSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 
 const root = await mkdtemp(join(tmpdir(), "reviewer-task-lifecycle-"));
@@ -35,6 +37,21 @@ async function makeClient(env) {
     { name: "reviewer-task-lifecycle-test", version: "1.0.0" },
     { capabilities: { tasks: { requests: { tools: { call: {} } } } } },
   );
+  await client.connect(transport);
+  return client;
+}
+
+async function makeLegacyClient(env, onProgress) {
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: [join(process.cwd(), "packages/mcp/dist/index.js")],
+    env,
+  });
+  const client = new Client(
+    { name: "reviewer-legacy-lifecycle-test", version: "1.0.0" },
+    { capabilities: {} },
+  );
+  client.setNotificationHandler(ProgressNotificationSchema, onProgress);
   await client.connect(transport);
   return client;
 }
@@ -127,6 +144,36 @@ setTimeout(() => process.stdout.write(JSON.stringify({result:JSON.stringify({sum
     )
     .run(repo.id, headSha, baseSha, timestamp);
 
+  const progress = [];
+  const legacy = await makeLegacyClient(env, (notification) => progress.push(notification.params));
+  const legacyResult = await legacy.request(
+    {
+      method: "tools/call",
+      params: {
+        name: "trigger_review",
+        arguments: { prId: 1 },
+        _meta: { progressToken: "legacy-review" },
+      },
+    },
+    CallToolResultSchema,
+  );
+  await legacy.close();
+  const legacyText = legacyResult.content?.find((item) => item.type === "text")?.text ?? "";
+  if (!legacyText.includes("bridge-independent success")) {
+    throw new Error(`Legacy call returned the wrong result: ${JSON.stringify(legacyResult)}`);
+  }
+  if (!progress.some((item) => item.progressToken === "legacy-review")) {
+    throw new Error(`Legacy call did not emit progress: ${JSON.stringify(progress)}`);
+  }
+  const legacyWork = api
+    .getDb()
+    .prepare("SELECT * FROM work_items WHERE kind = 'review' ORDER BY created_at LIMIT 1")
+    .get();
+  if (legacyWork?.status !== "done" || legacyWork.attempt_count !== 1) {
+    throw new Error(`Legacy work was not completed exactly once: ${JSON.stringify(legacyWork)}`);
+  }
+  process.stdout.write(`Legacy MCP call completed with durable progress: ${legacyWork.id}\n`);
+
   const first = await makeClient(env);
   const startedAt = Date.now();
   const created = await first.request(
@@ -197,7 +244,7 @@ setTimeout(() => process.stdout.write(JSON.stringify({result:JSON.stringify({sum
   if (recoveredWork?.status !== "done" || recoveredWork.attempt_count !== 2) {
     throw new Error(`Killed work was not reclaimed exactly once: ${JSON.stringify(recoveredWork)}`);
   }
-  if (reviews.filter((review) => review.status === "done").length !== 2) {
+  if (reviews.filter((review) => review.status === "done").length !== 3) {
     throw new Error(`Recovered review publication was not exact: ${JSON.stringify(reviews)}`);
   }
   process.stdout.write(`MCP task recovered a killed worker: ${crashed.task.taskId}\n`);
