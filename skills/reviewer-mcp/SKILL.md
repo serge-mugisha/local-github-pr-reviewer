@@ -50,7 +50,7 @@ Do not enter an endless review-fix loop. Address material correctness, security,
 - MCP Task recovery is a host responsibility. Reviewer persists the task before launching work; `tasks/get` and `tasks/result` recover it across MCP bridge replacement without asking the agent to construct timers or retry loops.
 - If a detached worker disappears, Reviewer fences its lease and retries safely. A stale worker cannot publish after recovery.
 - If the task returns a terminal error after bounded worker retries, report the precise error and correct the cause only within the user's authorized scope. A later review may use one new `trigger_review` call.
-- If the PR head changed after a completed review, that result does not gate the new head. Finish disposition of its threads, refresh the PR, trigger one new review, and await its returned ID.
+- If the PR head changed after a completed review, that result does not gate the new head. Finish disposition of its threads, refresh the PR, and trigger one new review; let the host return its terminal MCP Task result.
 - Never repeat a reply or revalidation merely because its original connection closed; its MCP Task remains durable.
 
 Do not call `clear_pr_review` as ordinary recovery. It deletes local review history and threads; use it only when the user explicitly wants that data cleared or a task specifically requires a clean slate.
