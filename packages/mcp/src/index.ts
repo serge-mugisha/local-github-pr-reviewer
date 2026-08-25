@@ -117,7 +117,7 @@ async function waitForLegacyWork(
 const server = new Server(
   {
     name: "reviewer-mcp",
-    version: "0.5.1",
+    version: "0.5.2",
   },
   {
     capabilities: {
@@ -125,7 +125,7 @@ const server = new Server(
       tasks: { requests: { tools: { call: {} } } },
     },
     instructions:
-      "All review state and threads are local, not GitHub comments. trigger_review, reply_to_thread, and revalidate_thread are durable operations: call each once and let that call deliver its terminal result. Task-capable hosts receive an MCP Task; legacy hosts receive a progress-kept call backed by the same detached work item. Never poll, create timers/watchers, restart Reviewer, or duplicate active work. Treat AI findings as advisory; patch, dismiss, revalidate, or resolve each thread deliberately before a new full review.",
+      "All review state and threads are local, not GitHub comments. trigger_review, reply_to_thread, and revalidate_thread are durable operations: call each once and let that call deliver its terminal result. Task-capable hosts receive an MCP Task; legacy hosts receive a progress-kept call backed by the same detached work item. If the host itself returns a transport timeout, retry trigger_review once with identical arguments to join its active work; never loop. For a timed-out reply or revalidation, inspect get_thread_action once before retrying so a completed reply is not duplicated. Never poll, create timers/watchers, restart Reviewer, or duplicate active work. Treat AI findings as advisory; patch, dismiss, revalidate, or resolve each thread deliberately before a new full review.",
   },
 );
 
@@ -347,7 +347,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       {
         name: "trigger_review",
         description:
-          "Runs one durable local AI review. Task-capable hosts receive an MCP Task; legacy hosts keep this call open with progress until the detached worker commits the summary and local threads. Call once and use its terminal result; do not poll or call await_review.",
+          "Runs one durable local AI review. Task-capable hosts receive an MCP Task; legacy hosts keep this call open with progress until the detached worker commits the summary and local threads. Call once and use its terminal result. If the host returns a transport timeout, retry once with identical arguments to join the active work; never loop, poll, or call await_review.",
         execution: { taskSupport: "optional" },
         inputSchema: {
           type: "object",
@@ -364,7 +364,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       {
         name: "reply_to_thread",
         description:
-          "Runs a durable local AI reply. Task-capable hosts receive an MCP Task; legacy hosts keep this call open with progress until completion. Nothing is posted to GitHub.",
+          "Runs a durable local AI reply. Task-capable hosts receive an MCP Task; legacy hosts keep this call open with progress until completion. Nothing is posted to GitHub. After a host transport timeout, inspect get_thread_action once before retrying so a completed reply is not duplicated.",
         execution: { taskSupport: "optional" },
         inputSchema: {
           type: "object",
@@ -378,7 +378,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       {
         name: "revalidate_thread",
         description:
-          "Runs a durable local AI revalidation. Task-capable hosts receive an MCP Task; legacy hosts keep this call open with progress until completion.",
+          "Runs a durable local AI revalidation. Task-capable hosts receive an MCP Task; legacy hosts keep this call open with progress until completion. After a host transport timeout, inspect get_thread_action once before retrying.",
         execution: { taskSupport: "optional" },
         inputSchema: {
           type: "object",

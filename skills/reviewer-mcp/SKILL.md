@@ -48,6 +48,8 @@ Do not enter an endless review-fix loop. Address material correctness, security,
 ## Recovery
 
 - Reviewer persists every operation before waiting. Task-capable hosts recover it with `tasks/get` and `tasks/result`; legacy hosts receive periodic progress on the original call. Neither mode requires the agent to construct timers, polling loops, or database readers.
+- A host-level `Request timed out` or transport timeout is not a terminal Reviewer result. For `trigger_review` only, call it one more time with identical arguments; the durable queue joins the active work item instead of launching another review. This single reattachment is the sole exception to the no-repeat rule—never loop.
+- If `reply_to_thread` or `revalidate_thread` times out at the transport layer, call `get_thread_action` once with the thread ID. Use its terminal result when complete; retry the identical action once only when the snapshot says it is still active, which safely joins it without duplicating a completed reply.
 - If a detached worker disappears, Reviewer fences its lease and retries safely. A stale worker cannot publish after recovery.
 - If the operation returns a terminal error after bounded worker retries, report the precise error and correct the cause only within the user's authorized scope. A later review may use one new `trigger_review` call.
 - If the PR head changed after a completed review, that result does not gate the new head. Finish disposition of its threads, refresh the PR, and trigger one new review; let the call return its terminal result.
@@ -75,7 +77,7 @@ Never:
 - call legacy `await_review` or `await_thread_action` after starting a durable operation;
 - poll `get_job_status` for a review, reply, or revalidation action;
 - create timers, watchers, database readers, or background tasks to race the durable operation;
-- call `trigger_review` repeatedly while a review is active;
+- call `trigger_review` repeatedly while a review is active, except for the single identical reattachment after an explicit host transport timeout described above;
 - start a new full review while previous actionable threads remain open;
 - infer completion from `openThreads`, silence, elapsed time, or the UI alone;
 - treat a legacy `jobId` as restart-safe;

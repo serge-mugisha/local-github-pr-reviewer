@@ -150,7 +150,7 @@ via `spawn`/`exec`. See [SECURITY.md](SECURITY.md) for details.
 
 ## MCP Server for AI Agents
 
-The tool includes a Model Context Protocol (MCP) server that exposes all PR reviewing, configuration, and conversational features to external AI agents (like Claude Desktop or Antigravity). This allows an AI agent to read PR diffs, set review rules, trigger reviews, and reply to threads directly from its own environment without using the web UI. Long-running review, reply, and revalidation calls use durable MCP Tasks backed by SQLite and detached Reviewer workers, so provider execution survives client timeouts and MCP bridge replacement without agent-authored polling or restart scripts.
+The tool includes a Model Context Protocol (MCP) server that exposes all PR reviewing, configuration, and conversational features to external AI agents (like Claude Desktop or Antigravity). This allows an AI agent to read PR diffs, set review rules, trigger reviews, and reply to threads directly from its own environment without using the web UI. Long-running review, reply, and revalidation calls use native MCP Tasks when the host supports them and progress-kept legacy calls otherwise. Both modes are backed by SQLite and detached Reviewer workers, so provider execution survives client timeouts and MCP bridge replacement without agent-authored polling or restart scripts.
 
 ### Usage with MCP Clients
 
@@ -168,11 +168,29 @@ cache-only reads, and an optional result limit are supported.
   "mcpServers": {
     "local-github-pr-reviewer": {
       "command": "node",
-      "args": ["/absolute/path/to/local-github-pr-reviewer/packages/mcp/dist/index.js"]
+      "args": ["/absolute/path/to/local-github-pr-reviewer/packages/mcp/dist/index.js"],
+      "timeout": 1800000
     }
   }
 }
 ```
+
+Claude's `timeout` is a hard per-tool wall-clock limit in milliseconds; progress notifications do
+not extend it. Thirty minutes covers Reviewer's bounded provider and worker lifecycle.
+
+**For Codex** (`~/.codex/config.toml`):
+
+```toml
+[mcp_servers.local-github-pr-reviewer]
+command = "node"
+args = ["/absolute/path/to/local-github-pr-reviewer/packages/mcp/dist/index.js"]
+tool_timeout_sec = 1800
+```
+
+Some embedded hosts impose their own non-configurable request cap. If a host reports a transport
+timeout, the detached work continues: retry `trigger_review` once with identical arguments to join
+the active item. For a timed-out reply or revalidation, inspect `get_thread_action` once before any
+retry so an already-completed reply is not duplicated. Do not create a polling loop.
 
 **For Antigravity** (`.gemini/config/config.json`):
 
