@@ -125,7 +125,7 @@ const server = new Server(
       tasks: { requests: { tools: { call: {} } } },
     },
     instructions:
-      "All review state and threads are local, not GitHub comments. trigger_review, reply_to_thread, and revalidate_thread are durable operations: call each once and let that call deliver its terminal result. Task-capable hosts receive an MCP Task; legacy hosts receive a progress-kept call backed by the same detached work item. If the host itself returns a transport timeout, inspect get_review_threads once: use a completed result for the expected head, or retry trigger_review once with identical arguments only when the review is running or was not enqueued. Never loop. For a timed-out reply or revalidation, inspect get_thread_action once before retrying so a completed reply is not duplicated. Never poll, create timers/watchers, restart Reviewer, or duplicate active work. Treat AI findings as advisory; patch, dismiss, revalidate, or resolve each thread deliberately before a new full review.",
+      "All review state and threads are local, not GitHub comments. trigger_review, reply_to_thread, and revalidate_thread are durable operations: call each once and let that call deliver its terminal result. Task-capable hosts receive an MCP Task; legacy hosts receive a progress-kept call backed by the same detached work item. If the host itself returns a transport timeout, inspect get_review_threads once: use a completed result for the expected head, or retry trigger_review once with identical arguments only when the review is running or was not enqueued. Never loop. Before reply or revalidation, retain its type and call start time. After a timeout, inspect get_thread_action once and accept it only when type and startedAt match this call; retry the identical action once when matching and active or when no matching action was claimed. Never poll, create timers/watchers, restart Reviewer, or duplicate active work. Treat AI findings as advisory; patch, dismiss, revalidate, or resolve each thread deliberately before a new full review.",
   },
 );
 
@@ -364,7 +364,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       {
         name: "reply_to_thread",
         description:
-          "Runs a durable local AI reply. Task-capable hosts receive an MCP Task; legacy hosts keep this call open with progress until completion. Nothing is posted to GitHub. After a host transport timeout, inspect get_thread_action once before retrying so a completed reply is not duplicated.",
+          "Runs a durable local AI reply. Task-capable hosts receive an MCP Task; legacy hosts keep this call open with progress until completion. Nothing is posted to GitHub. Retain the call start time; after a host timeout, inspect get_thread_action once and accept only a reply whose startedAt is not older than this call before deciding whether one identical retry is needed.",
         execution: { taskSupport: "optional" },
         inputSchema: {
           type: "object",
@@ -378,7 +378,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       {
         name: "revalidate_thread",
         description:
-          "Runs a durable local AI revalidation. Task-capable hosts receive an MCP Task; legacy hosts keep this call open with progress until completion. After a host transport timeout, inspect get_thread_action once before retrying.",
+          "Runs a durable local AI revalidation. Task-capable hosts receive an MCP Task; legacy hosts keep this call open with progress until completion. Retain the call start time; after a host timeout, inspect get_thread_action once and accept only a revalidation whose startedAt is not older than this call before deciding whether one identical retry is needed.",
         execution: { taskSupport: "optional" },
         inputSchema: {
           type: "object",

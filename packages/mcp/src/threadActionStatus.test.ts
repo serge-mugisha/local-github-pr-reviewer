@@ -40,8 +40,11 @@ describe("resolveThreadActionStatus", () => {
     });
     expect(resolveThreadActionStatus(action("running"))).toMatchObject({
       status: "running",
-      nextAction: expect.stringContaining("await_thread_action"),
+      nextAction: expect.stringContaining("retry the original"),
     });
+    expect(resolveThreadActionStatus(action("running")).nextAction).toContain(
+      "Do not call await_thread_action",
+    );
   });
 });
 

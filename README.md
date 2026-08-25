@@ -191,8 +191,9 @@ Some embedded hosts impose their own non-configurable request cap. If a host rep
 timeout, the detached work continues. Inspect `get_review_threads` once: use the committed result
 if the expected head completed, or retry `trigger_review` once with identical arguments only when
 the review is still running or no review was enqueued. For a timed-out reply or revalidation,
-inspect `get_thread_action` once before any retry so an already-completed reply is not duplicated.
-Do not create a polling loop.
+inspect `get_thread_action` once and verify its type and `startedAt` match the attempted call before
+using it. An older action is not the timed-out call; retry the identical operation once to join work
+that may still be queued. Do not create a polling loop.
 
 **For Antigravity** (`.gemini/config/config.json`):
 

@@ -64,7 +64,7 @@ export function resolveThreadActionStatus(action: ThreadActionRow): ThreadAction
     );
     status.statusMessage = `Thread action ${action.id} is healthy and still running (${elapsedSeconds}s elapsed; last heartbeat ${action.heartbeat_at ?? "pending"}).`;
     status.nextAction =
-      "Call await_thread_action once with this actionId. Do not poll or start another action on this thread.";
+      "After a transport timeout, retry the original reply_to_thread or revalidate_thread once with identical arguments to join this active action. Do not call await_thread_action, poll, or start a different action on this thread.";
   }
 
   return status;
