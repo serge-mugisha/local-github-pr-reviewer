@@ -171,14 +171,14 @@ cache-only reads, and an optional result limit are supported.
     "local-github-pr-reviewer": {
       "command": "node",
       "args": ["/absolute/path/to/local-github-pr-reviewer/packages/mcp/dist/index.js"],
-      "timeout": 1800000
+      "timeout": 2400000
     }
   }
 }
 ```
 
 Claude's `timeout` is a hard per-tool wall-clock limit in milliseconds; progress notifications do
-not extend it. Thirty minutes covers Reviewer's bounded provider and worker lifecycle.
+not extend it. Forty minutes covers Reviewer's bounded provider retry and worker lifecycle.
 
 **For Codex** (`~/.codex/config.toml`):
 
@@ -186,7 +186,7 @@ not extend it. Thirty minutes covers Reviewer's bounded provider and worker life
 [mcp_servers.local-github-pr-reviewer]
 command = "node"
 args = ["/absolute/path/to/local-github-pr-reviewer/packages/mcp/dist/index.js"]
-tool_timeout_sec = 1800
+tool_timeout_sec = 2400
 ```
 
 Some embedded hosts impose their own non-configurable request cap. If a host reports a transport

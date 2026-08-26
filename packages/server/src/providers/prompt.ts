@@ -133,6 +133,8 @@ with this schema and nothing after it:
 
 If you have no comments, return an empty "comments" array. That is the most
 common outcome for a well-formed PR; do not invent comments to fill space.
+Both top-level keys are required, and "summary" must be a non-empty paragraph
+even when "comments" is empty.
 `.trim();
 
 export function buildReviewPrompt(ctx: ReviewContext): string {

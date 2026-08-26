@@ -97,7 +97,7 @@ export function parseReviewOutput(
   const block = extractLastJsonBlock(raw);
   if (!block) {
     throw new ReviewOutputParseError(
-      "AI reviewer returned no complete review JSON object; retrying cannot be replaced with a clean result.",
+      "AI reviewer returned no complete review JSON object.",
       raw,
       sessionIds,
     );

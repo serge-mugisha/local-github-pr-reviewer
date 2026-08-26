@@ -1,6 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { buildReviewInstructions } from "../packages/server/src/providers/prompt.js";
-import type { ReviewInstructionConfig } from "../packages/server/src/providers/types.js";
+import {
+  buildReviewInstructions,
+  buildReviewPrompt,
+} from "../packages/server/src/providers/prompt.js";
+import type {
+  ReviewContext,
+  ReviewInstructionConfig,
+} from "../packages/server/src/providers/types.js";
 import { DEFAULT_CATEGORIES } from "../packages/server/src/reviewCatalog.js";
 
 function cfg(over: Partial<ReviewInstructionConfig> = {}): ReviewInstructionConfig {
@@ -57,5 +63,28 @@ describe("buildReviewInstructions", () => {
   it("handles an empty category set without crashing", () => {
     const out = buildReviewInstructions(cfg({ categories: [] }));
     expect(out).toContain("no categories selected");
+  });
+});
+
+describe("buildReviewPrompt", () => {
+  it("states the strict output envelope required by the fail-closed parser", () => {
+    const context: ReviewContext = {
+      cwd: "/repo",
+      prTitle: "Test PR",
+      prBody: "",
+      prNumber: 1,
+      repoSlug: "owner/repo",
+      headSha: "head",
+      baseSha: "base",
+      diff: "+change",
+      skills: "",
+      config: cfg(),
+      existingOpenThreads: [],
+    };
+
+    const out = buildReviewPrompt(context);
+    expect(out).toContain("Both top-level keys are required");
+    expect(out).toContain('"summary" must be a non-empty paragraph');
+    expect(out).toContain('return an empty "comments" array');
   });
 });

@@ -413,17 +413,17 @@ describe("startReview", () => {
       );
       const started = startReview({ repo, pr: mocks.pr, providerId: "test" });
       const completion = expect(started.completion).rejects.toThrow(
-        "Review exceeded the 20-minute total lifecycle limit.",
+        "Review exceeded the 35-minute total lifecycle limit.",
       );
       await vi.waitFor(() => expect(mocks.review).toHaveBeenCalledOnce());
 
-      await vi.advanceTimersByTimeAsync(20 * 60 * 1_000);
+      await vi.advanceTimersByTimeAsync(35 * 60 * 1_000);
       await completion;
       expect(
         mocks.db.prepare("SELECT status, error FROM reviews WHERE id = ?").get(started.reviewId),
       ).toEqual({
         status: "error",
-        error: "Review exceeded the 20-minute total lifecycle limit.",
+        error: "Review exceeded the 35-minute total lifecycle limit.",
       });
     } finally {
       vi.useRealTimers();
