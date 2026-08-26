@@ -123,6 +123,10 @@ revised version below
       summary: "No findings.",
       comments: [],
     });
+    expect(parseReviewOutput('```json\n{"summary":"No findings."}\n```')).toEqual({
+      summary: "No findings.",
+      comments: [],
+    });
     const finding = parseReviewOutput(
       '```json\n{"summary":"","comments":[{"path":"a.ts","line":1,"body":"Real finding"}]}\n```',
     );

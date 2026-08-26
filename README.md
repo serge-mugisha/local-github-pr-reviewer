@@ -152,7 +152,7 @@ via `spawn`/`exec`. See [SECURITY.md](SECURITY.md) for details.
 
 The tool includes a Model Context Protocol (MCP) server that exposes all PR reviewing, configuration, and conversational features to external AI agents (like Claude Desktop or Antigravity). This allows an AI agent to read PR diffs, set review rules, trigger reviews, and reply to threads directly from its own environment without using the web UI. Long-running review, reply, and revalidation calls use native MCP Tasks when the host supports them and progress-kept legacy calls otherwise. Both modes are backed by SQLite and detached Reviewer workers, so provider execution survives client timeouts and MCP bridge replacement without agent-authored polling or restart scripts.
 
-Reviewer validates the provider's structured review before publishing anything. If output is malformed, it retries the provider once; a second invalid response produces an explicit terminal error and no review or thread state is published. A completed zero-thread result is therefore a validated clean review—MCP consumers do not need to inspect raw provider output or the database.
+Reviewer validates the provider's structured review before publishing anything. If output is malformed, it retries the provider once; a second invalid response produces an explicit terminal error and no review or thread state is published. A completed zero-thread result is therefore a validated clean review; MCP consumers do not need to inspect raw provider output or the database.
 
 ### Usage with MCP Clients
 

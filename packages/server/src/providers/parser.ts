@@ -12,7 +12,7 @@ const CommentSchema = z.object({
 const ReviewSchema = z
   .object({
     summary: z.string().default(""),
-    comments: z.array(CommentSchema),
+    comments: z.array(CommentSchema).default([]),
   })
   .superRefine((review, ctx) => {
     if (review.summary.trim() || review.comments.length > 0) return;

@@ -81,7 +81,6 @@ Never:
 - call `trigger_review` repeatedly while a review is active, except for the single identical reattachment after an explicit host transport timeout described above;
 - start a new full review while previous actionable threads remain open;
 - infer completion from `openThreads`, silence, elapsed time, or the UI alone;
-- inspect raw provider output or the database to validate a completed clean result;
 - treat a legacy `jobId` as restart-safe;
 - run multiple consumers waiting on the same task;
 - accept a clean result without validating the exact reviewed head SHA.

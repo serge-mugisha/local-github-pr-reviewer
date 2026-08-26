@@ -24,7 +24,11 @@ import { recordSessions } from "./sessions.js";
 import { preparePrHeadWorktree, type PrWorktree } from "./prWorktree.js";
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
-import { DURABLE_EXECUTION_TIMEOUT_MS, DURABLE_WAIT_TIMEOUT_MS } from "./timing.js";
+import {
+  DURABLE_EXECUTION_TIMEOUT_MS,
+  DURABLE_WAIT_TIMEOUT_MS,
+  THREAD_ACTION_EXECUTION_TIMEOUT_MS,
+} from "./timing.js";
 
 function now(): string {
   return new Date().toISOString();
@@ -673,11 +677,11 @@ function startThreadAction<T>(args: {
   const executionController = new AbortController();
   localThreadActionExecutions.add(executionController);
   const lifecycleError = new Error(
-    `Thread action exceeded the ${Math.round(DURABLE_EXECUTION_TIMEOUT_MS / 60_000)}-minute total lifecycle limit.`,
+    `Thread action exceeded the ${Math.round(THREAD_ACTION_EXECUTION_TIMEOUT_MS / 60_000)}-minute total lifecycle limit.`,
   );
   const executionTimer = setTimeout(
     () => executionController.abort(lifecycleError),
-    DURABLE_EXECUTION_TIMEOUT_MS,
+    THREAD_ACTION_EXECUTION_TIMEOUT_MS,
   );
   executionTimer.unref?.();
   const heartbeat = db.prepare(
