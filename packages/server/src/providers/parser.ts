@@ -52,7 +52,7 @@ function extractLastJsonBlock(raw: string): { block: string | null; malformedFen
   // and a non-greedy match stops at that inner fence text.
   let last: string | null = null;
   let sawFence = false;
-  let malformedFence = false;
+  let lastFenceMalformed = false;
   for (const m of raw.matchAll(JSON_FENCE_MARKER)) {
     sawFence = true;
     const contentStart = m.index + m[0].length;
@@ -61,14 +61,15 @@ function extractLastJsonBlock(raw: string): { block: string | null; malformedFen
     const contentEnd = closingFence?.index ?? raw.length;
     const start = raw.indexOf("{", contentStart);
     if (start === -1 || start >= contentEnd) {
-      malformedFence = true;
+      last = null;
+      lastFenceMalformed = true;
       continue;
     }
     const block = balancedBlock(raw.slice(0, contentEnd), start);
-    if (block) last = block;
-    else malformedFence = true;
+    last = block;
+    lastFenceMalformed = block === null;
   }
-  if (sawFence) return { block: last, malformedFence };
+  if (sawFence) return { block: last, malformedFence: lastFenceMalformed };
   // Fallback: scan for the first top-level `{...}` whose contents look like
   // our schema (mentions "summary" or "comments" or "resolved" near the
   // start). Walks forward, tracking string/escape state, until braces balance.
