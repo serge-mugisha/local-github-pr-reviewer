@@ -360,6 +360,7 @@ describe("startReview", () => {
 
     const started = startReview({ repo, pr: mocks.pr, providerId: "test" });
     await expect(started.completion).rejects.toThrow("provider failed");
+    expect(mocks.review).toHaveBeenCalledOnce();
 
     expect(mocks.db.prepare("SELECT stale FROM threads WHERE id = ?").get(threadId)).toEqual({
       stale: 0,
