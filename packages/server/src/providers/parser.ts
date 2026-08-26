@@ -9,10 +9,19 @@ const CommentSchema = z.object({
   body: z.string().min(1),
 });
 
-const ReviewSchema = z.object({
-  summary: z.string().min(1),
-  comments: z.array(CommentSchema),
-});
+const ReviewSchema = z
+  .object({
+    summary: z.string().default(""),
+    comments: z.array(CommentSchema),
+  })
+  .superRefine((review, ctx) => {
+    if (review.summary.trim() || review.comments.length > 0) return;
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["summary"],
+      message: "A zero-finding review requires a non-empty summary.",
+    });
+  });
 
 const RevalidateSchema = z.object({
   resolved: z.boolean(),
@@ -112,7 +121,10 @@ export function parseReviewOutput(
       severity: c.severity,
       body: c.body,
     }));
-    return { summary: result.summary, comments };
+    const summary =
+      result.summary.trim() ||
+      `Review completed with ${comments.length} finding${comments.length === 1 ? "" : "s"}.`;
+    return { summary, comments };
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     throw new ReviewOutputParseError(

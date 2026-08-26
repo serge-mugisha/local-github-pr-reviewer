@@ -204,7 +204,7 @@ describe("startReview", () => {
 
     const started = startReview({ repo, pr: mocks.pr, providerId: "test" });
     await expect(started.completion).rejects.toThrow(
-      "AI reviewer output was invalid after 2 attempts. second invalid response",
+      'AI reviewer output was invalid after 2 attempts. second invalid response Output excerpt: "bad two".',
     );
 
     expect(mocks.review).toHaveBeenCalledTimes(2);
@@ -215,7 +215,8 @@ describe("startReview", () => {
     ).toEqual({
       status: "error",
       summary: null,
-      error: "AI reviewer output was invalid after 2 attempts. second invalid response",
+      error:
+        'AI reviewer output was invalid after 2 attempts. second invalid response Output excerpt: "bad two".',
     });
     expect(mocks.db.prepare("SELECT COUNT(*) AS count FROM threads").get()).toEqual({ count: 0 });
   });

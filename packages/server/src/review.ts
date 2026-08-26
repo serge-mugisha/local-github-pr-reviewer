@@ -43,6 +43,14 @@ const DURABLE_STALE_AFTER_MS =
 const DURABLE_POLL_INTERVAL_MS = 250;
 const MAX_PROVIDER_OUTPUT_ATTEMPTS = 2;
 
+function providerOutputExcerpt(raw: string, maxLength = 500): string {
+  const normalized = raw.replace(/\s+/g, " ").trim();
+  if (!normalized) return "";
+  const excerpt = normalized.slice(0, maxLength);
+  const suffix = normalized.length > maxLength ? "…" : "";
+  return ` Output excerpt: ${JSON.stringify(`${excerpt}${suffix}`)}.`;
+}
+
 function reconcileInterruptedWork(
   db: Database.Database,
   table: "reviews" | "thread_actions",
@@ -418,7 +426,7 @@ async function completeReview(
           recordSessions(refreshed.id, providerId, error.sessionIds, wt.cwd);
           if (attempt === MAX_PROVIDER_OUTPUT_ATTEMPTS) {
             throw new Error(
-              `AI reviewer output was invalid after ${MAX_PROVIDER_OUTPUT_ATTEMPTS} attempts. ${error.message}`,
+              `AI reviewer output was invalid after ${MAX_PROVIDER_OUTPUT_ATTEMPTS} attempts. ${error.message}${providerOutputExcerpt(error.rawOutput)}`,
             );
           }
           onProgress?.({

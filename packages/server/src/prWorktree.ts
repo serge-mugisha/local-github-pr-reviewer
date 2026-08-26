@@ -5,6 +5,7 @@ import { dataDir } from "./config.js";
 import type { RepoRow, PrRow } from "./db.js";
 import type { ProviderProgress } from "./providers/types.js";
 import { spawnCli } from "./providers/spawn.js";
+import { DURABLE_WAIT_TIMEOUT_MS } from "./timing.js";
 
 export interface PrWorktree {
   cwd: string;
@@ -12,7 +13,7 @@ export interface PrWorktree {
 }
 
 const WORKTREE_CLEANUP_TIMEOUT_MS = 30_000;
-const STALE_WORKTREE_AFTER_MS = 30 * 60 * 1_000;
+export const STALE_WORKTREE_AFTER_MS = DURABLE_WAIT_TIMEOUT_MS + 5 * 60 * 1_000;
 
 async function runGit(
   args: string[],
@@ -57,8 +58,8 @@ export async function pruneWorktrees(repos: RepoRow[]): Promise<void> {
 
 /**
  * Recover abandoned Reviewer worktrees without touching a checkout that may
- * belong to another active MCP process. Provider runs are capped at 15 minutes,
- * so a 30-minute-old worktree can no longer be part of a live review.
+ * belong to another active worker. The cutoff exceeds the complete durable
+ * lifecycle plus a safety margin, including a malformed-output retry.
  */
 export async function pruneStaleWorktrees(
   repos: RepoRow[],

@@ -1,5 +1,11 @@
 import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
-import { preparePrHeadWorktree, pruneStaleWorktrees, pruneWorktrees } from "./prWorktree.js";
+import {
+  preparePrHeadWorktree,
+  pruneStaleWorktrees,
+  pruneWorktrees,
+  STALE_WORKTREE_AFTER_MS,
+} from "./prWorktree.js";
+import { DURABLE_WAIT_TIMEOUT_MS } from "./timing.js";
 import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { readdir, rm, stat } from "node:fs/promises";
@@ -31,6 +37,10 @@ describe("preparePrHeadWorktree", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it("keeps stale pruning beyond every durable waiter", () => {
+    expect(STALE_WORKTREE_AFTER_MS).toBeGreaterThan(DURABLE_WAIT_TIMEOUT_MS);
   });
 
   function setupGitMock(responses: Record<string, string>) {

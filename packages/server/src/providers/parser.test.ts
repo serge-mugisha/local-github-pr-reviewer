@@ -115,7 +115,7 @@ revised version below
     expect(() => parseReviewOutput("```json\n{}\n```")).toThrow(ReviewOutputParseError);
   });
 
-  it("requires a non-empty summary even when the comments array is empty", () => {
+  it("requires a non-empty summary only when the comments array is empty", () => {
     expect(() => parseReviewOutput('```json\n{"summary":"","comments":[]}\n```')).toThrow(
       ReviewOutputParseError,
     );
@@ -123,6 +123,11 @@ revised version below
       summary: "No findings.",
       comments: [],
     });
+    const finding = parseReviewOutput(
+      '```json\n{"summary":"","comments":[{"path":"a.ts","line":1,"body":"Real finding"}]}\n```',
+    );
+    expect(finding.summary).toBe("Review completed with 1 finding.");
+    expect(finding.comments).toHaveLength(1);
   });
 
   it("falls back to extracting a raw {…} blob when no fence is present", () => {
