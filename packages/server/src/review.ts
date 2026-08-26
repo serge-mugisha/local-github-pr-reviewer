@@ -24,6 +24,7 @@ import { recordSessions } from "./sessions.js";
 import { preparePrHeadWorktree, type PrWorktree } from "./prWorktree.js";
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
+import { DURABLE_EXECUTION_TIMEOUT_MS, DURABLE_WAIT_TIMEOUT_MS } from "./timing.js";
 
 function now(): string {
   return new Date().toISOString();
@@ -39,11 +40,6 @@ const DURABLE_STALE_AFTER_MS =
   Number.isFinite(configuredStaleAfterMs) && configuredStaleAfterMs >= 250
     ? configuredStaleAfterMs
     : 30_000;
-// Two provider attempts can each consume their 15-minute CLI deadline after
-// hydration and worktree setup. Keep the durable owner alive long enough for
-// both attempts, while retaining a hard bounded lifecycle.
-const DURABLE_EXECUTION_TIMEOUT_MS = 35 * 60 * 1_000;
-const DURABLE_WAIT_TIMEOUT_MS = 36 * 60 * 1_000;
 const DURABLE_POLL_INTERVAL_MS = 250;
 const MAX_PROVIDER_OUTPUT_ATTEMPTS = 2;
 

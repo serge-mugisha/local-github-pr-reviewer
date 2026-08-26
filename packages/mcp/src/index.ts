@@ -788,8 +788,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
               .number()
               .int()
               .min(1_000)
-              .max(21 * 60 * 1_000)
-              .default(21 * 60 * 1_000),
+              .max(api.DURABLE_WAIT_TIMEOUT_MS)
+              .default(api.DURABLE_WAIT_TIMEOUT_MS),
           })
           .parse(request.params.arguments);
         const resolved = await handleAwaitReview(
@@ -902,8 +902,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
               .number()
               .int()
               .min(1_000)
-              .max(21 * 60 * 1_000)
-              .default(21 * 60 * 1_000),
+              .max(api.DURABLE_WAIT_TIMEOUT_MS)
+              .default(api.DURABLE_WAIT_TIMEOUT_MS),
           })
           .parse(request.params.arguments);
         const resolved = await handleAwaitThreadAction(

@@ -14,3 +14,4 @@ export * from "./repoDetect.js";
 export * from "./config.js";
 export * from "./prWorktree.js";
 export * from "./workQueue.js";
+export * from "./timing.js";

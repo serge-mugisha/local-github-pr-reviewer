@@ -4,6 +4,7 @@ import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { getDb, type WorkItemRow } from "./db.js";
+import { DURABLE_WAIT_TIMEOUT_MS } from "./timing.js";
 
 const configuredHeartbeatMs = Number(process.env.REVIEWER_HEARTBEAT_MS);
 const HEARTBEAT_MS =
@@ -345,7 +346,7 @@ export async function waitForWorkItem(
   } = {},
 ): Promise<WorkItemRow> {
   const started = Date.now();
-  const timeoutMs = options.timeoutMs === undefined ? 21 * 60 * 1_000 : options.timeoutMs;
+  const timeoutMs = options.timeoutMs === undefined ? DURABLE_WAIT_TIMEOUT_MS : options.timeoutMs;
   let eventCursor = 0;
   for (;;) {
     const work = ensureWorkItemRunning(workId);
