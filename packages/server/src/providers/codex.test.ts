@@ -60,6 +60,25 @@ describe("codexProvider failures", () => {
       `codex exited 1\n\n${cliError}\n\nCodex authentication failed.`,
     );
   });
+
+  it("rejects unstructured review output and retains the provider session", async () => {
+    mocks.spawnCli.mockResolvedValue({
+      exitCode: 0,
+      stderr: "",
+      stdout: `${JSON.stringify({ type: "thread.started", thread_id: "codex-session" })}\n${JSON.stringify(
+        {
+          type: "item.completed",
+          item: { type: "agent_message", text: "No structured result" },
+        },
+      )}\n`,
+      combinedOutput: "",
+    });
+
+    await expect(codexProvider.review(reviewContext())).rejects.toMatchObject({
+      name: "ReviewOutputParseError",
+      sessionIds: ["codex-session"],
+    });
+  });
 });
 
 describe("codexProvider invocation", () => {

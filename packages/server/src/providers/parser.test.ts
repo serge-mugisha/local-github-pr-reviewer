@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseReviewOutput, parseRevalidateOutput } from "./parser.js";
+import { parseReviewOutput, parseRevalidateOutput, ReviewOutputParseError } from "./parser.js";
 
 describe("parseReviewOutput", () => {
   it("extracts comments from a fenced json block at the end of the response", () => {
@@ -27,9 +27,51 @@ Some narration first.
     });
   });
 
+  it("survives a fenced code snippet inside a comment body", () => {
+    const raw = `
+Findings below.
+
+\`\`\`json
+{
+  "summary": "One finding with a suggested patch.",
+  "comments": [
+    { "path": "src/foo.ts", "line": 3, "side": "RIGHT", "severity": "concern",
+      "body": "Wrap it:\\n\\n\`\`\`python\\ndef _all():\\n    pass\\n\`\`\`" }
+  ]
+}
+\`\`\`
+`;
+    const out = parseReviewOutput(raw);
+    expect(out.summary).toBe("One finding with a suggested patch.");
+    expect(out.comments).toHaveLength(1);
+  });
+
+  it("does not mistake a fenced JSON suggestion inside a comment for the review envelope", () => {
+    const suggestedJson = JSON.stringify({ sample: true });
+    const payload = JSON.stringify(
+      {
+        summary: "The outer review remains authoritative.",
+        comments: [
+          {
+            path: "src/foo.ts",
+            line: 3,
+            side: "RIGHT",
+            severity: "concern",
+            body: `Use this:\n\n\`\`\`json\n${suggestedJson}\n\`\`\``,
+          },
+        ],
+      },
+      null,
+      2,
+    );
+    const out = parseReviewOutput(`\`\`\`json\n${payload}\n\`\`\``);
+    expect(out.summary).toBe("The outer review remains authoritative.");
+    expect(out.comments[0]?.body).toContain(suggestedJson);
+  });
+
   it("defaults side to RIGHT when omitted and a path is present", () => {
     const raw =
-      '```json\n{"summary":"","comments":[{"path":"a.ts","line":1,"severity":"nit","body":"x"}]}\n```';
+      '```json\n{"summary":"One nit.","comments":[{"path":"a.ts","line":1,"severity":"nit","body":"x"}]}\n```';
     const out = parseReviewOutput(raw);
     expect(out.comments[0]!.side).toBe("RIGHT");
   });
@@ -51,16 +93,36 @@ revised version below
     expect(out.comments[0]!.body).toBe("new");
   });
 
-  it("returns empty result when no json block is present", () => {
-    const out = parseReviewOutput("Just a freeform response, no JSON at all.");
-    expect(out.comments).toEqual([]);
-    expect(out.summary).toBe("");
+  it("fails explicitly when no json block is present", () => {
+    expect(() => parseReviewOutput("Just a freeform response, no JSON at all.")).toThrow(
+      ReviewOutputParseError,
+    );
   });
 
-  it("returns empty result on malformed JSON", () => {
+  it("fails explicitly on malformed JSON and retains recovery diagnostics", () => {
     const raw = '```json\n{ "summary": "broken", "comments": [\n```';
-    const out = parseReviewOutput(raw);
-    expect(out.comments).toEqual([]);
+    let caught: unknown;
+    try {
+      parseReviewOutput(raw, ["session-1"]);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(ReviewOutputParseError);
+    expect(caught).toMatchObject({ rawOutput: raw, sessionIds: ["session-1"] });
+  });
+
+  it("rejects an empty object instead of treating it as a clean review", () => {
+    expect(() => parseReviewOutput("```json\n{}\n```")).toThrow(ReviewOutputParseError);
+  });
+
+  it("requires a non-empty summary even when the comments array is empty", () => {
+    expect(() => parseReviewOutput('```json\n{"summary":"","comments":[]}\n```')).toThrow(
+      ReviewOutputParseError,
+    );
+    expect(parseReviewOutput('```json\n{"summary":"No findings.","comments":[]}\n```')).toEqual({
+      summary: "No findings.",
+      comments: [],
+    });
   });
 
   it("falls back to extracting a raw {…} blob when no fence is present", () => {

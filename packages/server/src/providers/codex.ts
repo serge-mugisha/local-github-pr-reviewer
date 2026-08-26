@@ -145,7 +145,7 @@ export const codexProvider: Provider = {
   async review(ctx, onProgress, signal) {
     const prompt = buildReviewPrompt(ctx);
     const { text, sessionIds } = await runCodex(prompt, ctx.cwd, onProgress, signal);
-    const { summary, comments } = parseReviewOutput(text);
+    const { summary, comments } = parseReviewOutput(text, sessionIds);
     return { summary, comments, rawOutput: text, sessionIds } satisfies ReviewResult;
   },
 

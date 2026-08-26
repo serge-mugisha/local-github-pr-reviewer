@@ -141,4 +141,18 @@ describe("antigravityProvider", () => {
       `agy exited 1\n\n${cliError}\n\nAntigravity authentication failed.`,
     );
   });
+
+  it("rejects unstructured review output instead of returning a clean review", async () => {
+    mocks.spawnCli.mockResolvedValue({
+      exitCode: 0,
+      stderr: "",
+      stdout: "No structured result",
+      combinedOutput: "No structured result",
+    });
+
+    await expect(antigravityProvider.review(reviewContext())).rejects.toMatchObject({
+      name: "ReviewOutputParseError",
+      sessionIds: [],
+    });
+  });
 });

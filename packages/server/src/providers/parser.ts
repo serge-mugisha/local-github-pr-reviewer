@@ -10,8 +10,8 @@ const CommentSchema = z.object({
 });
 
 const ReviewSchema = z.object({
-  summary: z.string().default(""),
-  comments: z.array(CommentSchema).default([]),
+  summary: z.string().min(1),
+  comments: z.array(CommentSchema),
 });
 
 const RevalidateSchema = z.object({
@@ -19,12 +19,33 @@ const RevalidateSchema = z.object({
   explanation: z.string().default(""),
 });
 
-const FENCED_JSON = /```json\s*([\s\S]*?)\s*```/gi;
+// Match only actual Markdown fence lines. A review comment body can contain
+// the encoded characters ```json, but inside the outer JSON string they are
+// not on a physical line of provider output and must not become candidates.
+const JSON_FENCE_MARKER = /^[\t ]*```json[\t ]*\r?$/gim;
+
+export class ReviewOutputParseError extends Error {
+  readonly rawOutput: string;
+  readonly sessionIds: string[];
+
+  constructor(message: string, rawOutput: string, sessionIds: string[] = []) {
+    super(message);
+    this.name = "ReviewOutputParseError";
+    this.rawOutput = rawOutput;
+    this.sessionIds = sessionIds;
+  }
+}
 
 function extractLastJsonBlock(raw: string): string | null {
+  // Brace-balance from each real ```json fence rather than regexing to the
+  // next ```: a finding body may itself contain an encoded fenced snippet,
+  // and a non-greedy match stops at that inner fence text.
   let last: string | null = null;
-  for (const m of raw.matchAll(FENCED_JSON)) {
-    last = m[1] ?? null;
+  for (const m of raw.matchAll(JSON_FENCE_MARKER)) {
+    const start = raw.indexOf("{", m.index + m[0].length);
+    if (start === -1) continue;
+    const block = balancedBlock(raw, start);
+    if (block) last = block;
   }
   if (last) return last;
   // Fallback: scan for the first top-level `{...}` whose contents look like
@@ -69,10 +90,17 @@ function balancedBlock(raw: string, start: number): string | null {
   return null;
 }
 
-export function parseReviewOutput(raw: string): { summary: string; comments: ReviewComment[] } {
+export function parseReviewOutput(
+  raw: string,
+  sessionIds: string[] = [],
+): { summary: string; comments: ReviewComment[] } {
   const block = extractLastJsonBlock(raw);
   if (!block) {
-    return { summary: "", comments: [] };
+    throw new ReviewOutputParseError(
+      "AI reviewer returned no complete review JSON object; retrying cannot be replaced with a clean result.",
+      raw,
+      sessionIds,
+    );
   }
   try {
     const parsed = JSON.parse(block);
@@ -85,8 +113,13 @@ export function parseReviewOutput(raw: string): { summary: string; comments: Rev
       body: c.body,
     }));
     return { summary: result.summary, comments };
-  } catch {
-    return { summary: "", comments: [] };
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new ReviewOutputParseError(
+      `AI reviewer returned invalid review JSON: ${reason}`,
+      raw,
+      sessionIds,
+    );
   }
 }
 

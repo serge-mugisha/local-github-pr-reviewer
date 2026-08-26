@@ -117,7 +117,7 @@ async function waitForLegacyWork(
 const server = new Server(
   {
     name: "reviewer-mcp",
-    version: "0.5.2",
+    version: "0.5.3",
   },
   {
     capabilities: {
@@ -125,7 +125,7 @@ const server = new Server(
       tasks: { requests: { tools: { call: {} } } },
     },
     instructions:
-      "All review state and threads are local, not GitHub comments. trigger_review, reply_to_thread, and revalidate_thread are durable operations: call each once and let that call deliver its terminal result. Task-capable hosts receive an MCP Task; legacy hosts receive a progress-kept call backed by the same detached work item. If the host itself returns a transport timeout, inspect get_review_threads once: use a completed result for the expected head, or retry trigger_review once with identical arguments only when the review is running or was not enqueued. Never loop. Before reply or revalidation, retain its type and call start time. After a timeout, inspect get_thread_action once and accept it only when type and startedAt match this call; retry the identical action once when matching and active or when no matching action was claimed. Never poll, create timers/watchers, restart Reviewer, or duplicate active work. Treat AI findings as advisory; patch, dismiss, revalidate, or resolve each thread deliberately before a new full review.",
+      "All review state and threads are local, not GitHub comments. trigger_review, reply_to_thread, and revalidate_thread are durable operations: call each once and let that call deliver its terminal result. Task-capable hosts receive an MCP Task; legacy hosts receive a progress-kept call backed by the same detached work item. Reviewer validates provider output and retries malformed output once; completed zero-thread reviews are validated, so never inspect raw provider logs or the database to confirm them. If the host itself returns a transport timeout, inspect get_review_threads once: use a completed result for the expected head, or retry trigger_review once with identical arguments only when the review is running or was not enqueued. Never loop. Before reply or revalidation, retain its type and call start time. After a timeout, inspect get_thread_action once and accept it only when type and startedAt match this call; retry the identical action once when matching and active or when no matching action was claimed. Never poll, create timers/watchers, restart Reviewer, or duplicate active work. Treat AI findings as advisory; patch, dismiss, revalidate, or resolve each thread deliberately before a new full review.",
   },
 );
 
@@ -347,7 +347,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       {
         name: "trigger_review",
         description:
-          "Runs one durable local AI review. Task-capable hosts receive an MCP Task; legacy hosts keep this call open with progress until the detached worker commits the summary and local threads. Call once and use its terminal result. After a host transport timeout, inspect get_review_threads once: use a completed result for the expected head, or retry once with identical arguments only when the review is running or was not enqueued. Never loop, poll, or call await_review.",
+          "Runs one durable local AI review. Task-capable hosts receive an MCP Task; legacy hosts keep this call open with progress until the detached worker commits a strictly validated summary and local threads. Malformed provider output is retried once and otherwise returns an explicit error, never a false clean review. Call once and use its terminal result; do not inspect raw provider logs or the database. After a host transport timeout, inspect get_review_threads once: use a completed result for the expected head, or retry once with identical arguments only when the review is running or was not enqueued. Never loop, poll, or call await_review.",
         execution: { taskSupport: "optional" },
         inputSchema: {
           type: "object",

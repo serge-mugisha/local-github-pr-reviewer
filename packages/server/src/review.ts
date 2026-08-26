@@ -8,9 +8,11 @@ import {
   type ThreadActionRow,
 } from "./db.js";
 import { getProvider } from "./providers/index.js";
+import { ReviewOutputParseError } from "./providers/parser.js";
 import type {
   ProviderProgress,
   ReviewContext,
+  ReviewResult,
   ReplyContext,
   RevalidateContext,
 } from "./providers/types.js";
@@ -40,6 +42,7 @@ const DURABLE_STALE_AFTER_MS =
 const DURABLE_EXECUTION_TIMEOUT_MS = 20 * 60 * 1_000;
 const DURABLE_WAIT_TIMEOUT_MS = 21 * 60 * 1_000;
 const DURABLE_POLL_INTERVAL_MS = 250;
+const MAX_PROVIDER_OUTPUT_ATTEMPTS = 2;
 
 function reconcileInterruptedWork(
   db: Database.Database,
@@ -406,7 +409,26 @@ async function completeReview(
         })),
       };
 
-      const result = await provider.review(ctx, onProgress, executionController.signal);
+      let result: ReviewResult | undefined;
+      for (let attempt = 1; attempt <= MAX_PROVIDER_OUTPUT_ATTEMPTS; attempt++) {
+        try {
+          result = await provider.review(ctx, onProgress, executionController.signal);
+          break;
+        } catch (error) {
+          if (!(error instanceof ReviewOutputParseError)) throw error;
+          recordSessions(refreshed.id, providerId, error.sessionIds, wt.cwd);
+          if (attempt === MAX_PROVIDER_OUTPUT_ATTEMPTS) {
+            throw new Error(
+              `AI reviewer output was invalid after ${MAX_PROVIDER_OUTPUT_ATTEMPTS} attempts. ${error.message}`,
+            );
+          }
+          onProgress?.({
+            type: "log",
+            data: `[reviewer] ${error.message} Retrying the provider once.\n`,
+          });
+        }
+      }
+      if (!result) throw new Error("AI reviewer produced no validated result.");
       assertLease();
       recordSessions(refreshed.id, providerId, result.sessionIds, wt.cwd);
 

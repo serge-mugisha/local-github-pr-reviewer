@@ -26,6 +26,7 @@ Review a stable, pushed PR head after the planned implementation and local verif
 3. Apply a preset or configuration only when the task calls for it. Do so before triggering the review.
 4. Call `trigger_review` once. Reviewer queues the work before waiting and a detached worker owns the provider. A Task-capable host receives a protocol-native MCP Task; a legacy host keeps the same tool call open with periodic progress until the durable result is ready. Do not call `await_review` afterward in either mode.
 5. Let the `trigger_review` call return its terminal result. Completion and all threads are committed atomically. Treat it as complete only when its status is `completed`; triage the threads in that result rather than querying elsewhere to guess whether publication finished.
+   Reviewer strictly validates provider output and retries malformed output once before returning an explicit terminal error. A completed zero-thread result is validated; do not inspect raw provider logs or the database to second-guess it.
 6. Address every open, non-stale thread as described below.
 7. Refresh with `get_pr_details` and compare its current `pr.head_sha` with the completed result's `headSha`. A review gates only the exact matching head.
 
@@ -80,6 +81,7 @@ Never:
 - call `trigger_review` repeatedly while a review is active, except for the single identical reattachment after an explicit host transport timeout described above;
 - start a new full review while previous actionable threads remain open;
 - infer completion from `openThreads`, silence, elapsed time, or the UI alone;
+- inspect raw provider output or the database to validate a completed clean result;
 - treat a legacy `jobId` as restart-safe;
 - run multiple consumers waiting on the same task;
 - accept a clean result without validating the exact reviewed head SHA.

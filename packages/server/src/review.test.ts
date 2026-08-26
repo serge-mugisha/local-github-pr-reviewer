@@ -1,6 +1,7 @@
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { migrateDatabase, type PrRow, type RepoRow } from "./db.js";
+import { ReviewOutputParseError } from "./providers/parser.js";
 import {
   abortLocalReviewWork,
   reconcileInterruptedThreadActions,
@@ -19,6 +20,7 @@ const mocks = vi.hoisted(() => ({
   reply: vi.fn(),
   revalidate: vi.fn(),
   cleanup: vi.fn(),
+  recordSessions: vi.fn(),
 }));
 
 vi.mock("./db.js", async (importOriginal) => {
@@ -47,7 +49,7 @@ vi.mock("./reviewConfig.js", () => ({
 }));
 vi.mock("./github.js", () => ({ getPRDiff: vi.fn().mockResolvedValue("diff") }));
 vi.mock("./prs.js", () => ({ hydratePR: () => Promise.resolve(mocks.pr) }));
-vi.mock("./sessions.js", () => ({ recordSessions: vi.fn() }));
+vi.mock("./sessions.js", () => ({ recordSessions: mocks.recordSessions }));
 vi.mock("./prWorktree.js", () => ({
   preparePrHeadWorktree: () => Promise.resolve({ cwd: "/tmp/review-wt", cleanup: mocks.cleanup }),
 }));
@@ -92,6 +94,7 @@ beforeEach(() => {
   mocks.reply.mockReset();
   mocks.revalidate.mockReset();
   mocks.cleanup.mockReset();
+  mocks.recordSessions.mockReset();
   mocks.cleanup.mockResolvedValue(undefined);
   mocks.review.mockResolvedValue({
     summary: "Looks good",
@@ -157,6 +160,64 @@ describe("startReview", () => {
     expect(
       mocks.db.prepare("SELECT status, error FROM reviews WHERE id = ?").get(started.reviewId),
     ).toEqual({ status: "done", error: null });
+  });
+
+  it("retries one invalid provider response and publishes only the validated result", async () => {
+    const onProgress = vi.fn();
+    mocks.review
+      .mockRejectedValueOnce(
+        new ReviewOutputParseError("invalid first response", "not json", ["failed-session"]),
+      )
+      .mockResolvedValueOnce({
+        summary: "Validated second response",
+        comments: [],
+        rawOutput: "valid json",
+        sessionIds: ["successful-session"],
+      });
+
+    const started = startReview({ repo, pr: mocks.pr, providerId: "test", onProgress });
+    await expect(started.completion).resolves.toEqual({
+      reviewId: started.reviewId,
+      addedThreads: 0,
+      staleMarked: 0,
+    });
+
+    expect(mocks.review).toHaveBeenCalledTimes(2);
+    expect(onProgress).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "log", data: expect.stringContaining("Retrying") }),
+    );
+    expect(mocks.recordSessions).toHaveBeenCalledWith(
+      mocks.pr.id,
+      "test",
+      ["failed-session"],
+      "/tmp/review-wt",
+    );
+    expect(
+      mocks.db.prepare("SELECT status, summary FROM reviews WHERE id = ?").get(started.reviewId),
+    ).toEqual({ status: "done", summary: "Validated second response" });
+  });
+
+  it("fails the review explicitly when both provider responses are invalid", async () => {
+    mocks.review
+      .mockRejectedValueOnce(new ReviewOutputParseError("first invalid response", "bad one"))
+      .mockRejectedValueOnce(new ReviewOutputParseError("second invalid response", "bad two"));
+
+    const started = startReview({ repo, pr: mocks.pr, providerId: "test" });
+    await expect(started.completion).rejects.toThrow(
+      "AI reviewer output was invalid after 2 attempts. second invalid response",
+    );
+
+    expect(mocks.review).toHaveBeenCalledTimes(2);
+    expect(
+      mocks.db
+        .prepare("SELECT status, summary, error FROM reviews WHERE id = ?")
+        .get(started.reviewId),
+    ).toEqual({
+      status: "error",
+      summary: null,
+      error: "AI reviewer output was invalid after 2 attempts. second invalid response",
+    });
+    expect(mocks.db.prepare("SELECT COUNT(*) AS count FROM threads").get()).toEqual({ count: 0 });
   });
 
   it("joins the active persisted review instead of launching a duplicate provider", async () => {

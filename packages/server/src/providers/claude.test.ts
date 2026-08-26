@@ -54,4 +54,18 @@ describe("claudeProvider failures", () => {
       `claude exited 1\n\n${cliError}`,
     );
   });
+
+  it("rejects unstructured review output and retains the provider session", async () => {
+    mocks.spawnCli.mockResolvedValue({
+      exitCode: 0,
+      stderr: "",
+      stdout: JSON.stringify({ result: "No structured result", session_id: "claude-session" }),
+      combinedOutput: "",
+    });
+
+    await expect(claudeProvider.review(reviewContext())).rejects.toMatchObject({
+      name: "ReviewOutputParseError",
+      sessionIds: ["claude-session"],
+    });
+  });
 });
