@@ -32,6 +32,7 @@ const RevalidateSchema = z.object({
 // the encoded characters ```json, but inside the outer JSON string they are
 // not on a physical line of provider output and must not become candidates.
 const JSON_FENCE_MARKER = /^[\t ]*```json[\t ]*\r?$/gim;
+const CLOSING_FENCE_MARKER = /^[\t ]*```[\t ]*\r?$/gm;
 
 export class ReviewOutputParseError extends Error {
   readonly rawOutput: string;
@@ -45,27 +46,40 @@ export class ReviewOutputParseError extends Error {
   }
 }
 
-function extractLastJsonBlock(raw: string): string | null {
+function extractLastJsonBlock(raw: string): { block: string | null; malformedFence: boolean } {
   // Brace-balance from each real ```json fence rather than regexing to the
   // next ```: a finding body may itself contain an encoded fenced snippet,
   // and a non-greedy match stops at that inner fence text.
   let last: string | null = null;
+  let sawFence = false;
+  let malformedFence = false;
   for (const m of raw.matchAll(JSON_FENCE_MARKER)) {
-    const start = raw.indexOf("{", m.index + m[0].length);
-    if (start === -1) continue;
-    const block = balancedBlock(raw, start);
+    sawFence = true;
+    const contentStart = m.index + m[0].length;
+    CLOSING_FENCE_MARKER.lastIndex = contentStart;
+    const closingFence = CLOSING_FENCE_MARKER.exec(raw);
+    const contentEnd = closingFence?.index ?? raw.length;
+    const start = raw.indexOf("{", contentStart);
+    if (start === -1 || start >= contentEnd) {
+      malformedFence = true;
+      continue;
+    }
+    const block = balancedBlock(raw.slice(0, contentEnd), start);
     if (block) last = block;
+    else malformedFence = true;
   }
-  if (last) return last;
+  if (sawFence) return { block: last, malformedFence };
   // Fallback: scan for the first top-level `{...}` whose contents look like
   // our schema (mentions "summary" or "comments" or "resolved" near the
   // start). Walks forward, tracking string/escape state, until braces balance.
   for (let start = raw.indexOf("{"); start !== -1; start = raw.indexOf("{", start + 1)) {
     const block = balancedBlock(raw, start);
     if (!block) continue;
-    if (/"(summary|comments|resolved|explanation)"\s*:/.test(block)) return block;
+    if (/"(summary|comments|resolved|explanation)"\s*:/.test(block)) {
+      return { block, malformedFence: false };
+    }
   }
-  return null;
+  return { block: null, malformedFence: false };
 }
 
 function balancedBlock(raw: string, start: number): string | null {
@@ -103,8 +117,15 @@ export function parseReviewOutput(
   raw: string,
   sessionIds: string[] = [],
 ): { summary: string; comments: ReviewComment[] } {
-  const block = extractLastJsonBlock(raw);
-  if (!block) {
+  const extracted = extractLastJsonBlock(raw);
+  if (extracted.malformedFence) {
+    throw new ReviewOutputParseError(
+      "AI reviewer returned a malformed fenced review JSON object.",
+      raw,
+      sessionIds,
+    );
+  }
+  if (!extracted.block) {
     throw new ReviewOutputParseError(
       "AI reviewer returned no complete review JSON object.",
       raw,
@@ -112,7 +133,7 @@ export function parseReviewOutput(
     );
   }
   try {
-    const parsed = JSON.parse(block);
+    const parsed = JSON.parse(extracted.block);
     const result = ReviewSchema.parse(parsed);
     const comments: ReviewComment[] = result.comments.map((c) => ({
       path: c.path ?? null,
@@ -138,10 +159,10 @@ export function parseReviewOutput(
 export function parseRevalidateOutput(
   raw: string,
 ): { resolved: boolean; explanation: string } | null {
-  const block = extractLastJsonBlock(raw);
-  if (!block) return null;
+  const extracted = extractLastJsonBlock(raw);
+  if (!extracted.block || extracted.malformedFence) return null;
   try {
-    const parsed = JSON.parse(block);
+    const parsed = JSON.parse(extracted.block);
     return RevalidateSchema.parse(parsed);
   } catch {
     return null;

@@ -93,6 +93,21 @@ revised version below
     expect(out.comments[0]!.body).toBe("new");
   });
 
+  it("rejects an earlier valid draft when the final fenced revision is malformed", () => {
+    const raw = `
+\`\`\`json
+{"summary":"superseded draft","comments":[]}
+\`\`\`
+
+revised version below
+
+\`\`\`json
+{"summary":"truncated final","comments":[]
+\`\`\`
+`;
+    expect(() => parseReviewOutput(raw)).toThrow(ReviewOutputParseError);
+  });
+
   it("fails explicitly when no json block is present", () => {
     expect(() => parseReviewOutput("Just a freeform response, no JSON at all.")).toThrow(
       ReviewOutputParseError,
