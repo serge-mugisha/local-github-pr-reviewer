@@ -158,6 +158,14 @@ export function buildReviewPrompt(ctx: ReviewContext): string {
     "",
     `# Existing open threads — do NOT duplicate these`,
     threads,
+    ...(ctx.retryFeedback
+      ? [
+          "",
+          "# Previous response was rejected",
+          ctx.retryFeedback,
+          "Return a corrected final JSON envelope that follows the output contract below.",
+        ]
+      : []),
     "",
     `# Diff`,
     "```diff",

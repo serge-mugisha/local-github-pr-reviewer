@@ -37,6 +37,7 @@ export interface ReviewContext {
   skills: string; // per-repo notes/rules markdown
   config: ReviewInstructionConfig; // resolved review configuration
   existingOpenThreads: { path: string | null; line: number | null; summary: string }[];
+  retryFeedback?: string; // parser feedback supplied only after an invalid provider response
 }
 
 export interface ReplyContext {

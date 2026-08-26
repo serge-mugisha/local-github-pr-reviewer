@@ -183,6 +183,10 @@ describe("startReview", () => {
     });
 
     expect(mocks.review).toHaveBeenCalledTimes(2);
+    expect(mocks.review.mock.calls[0]?.[0]).not.toHaveProperty("retryFeedback");
+    expect(mocks.review.mock.calls[1]?.[0]).toMatchObject({
+      retryFeedback: "invalid first response",
+    });
     expect(onProgress).toHaveBeenCalledWith(
       expect.objectContaining({ type: "log", data: expect.stringContaining("Retrying") }),
     );

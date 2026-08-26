@@ -87,4 +87,26 @@ describe("buildReviewPrompt", () => {
     expect(out).toContain('"summary" must be a non-empty paragraph');
     expect(out).toContain('return an empty "comments" array');
   });
+
+  it("adds parser feedback to a retry prompt", () => {
+    const context: ReviewContext = {
+      cwd: "/repo",
+      prTitle: "Test PR",
+      prBody: "",
+      prNumber: 1,
+      repoSlug: "owner/repo",
+      headSha: "head",
+      baseSha: "base",
+      diff: "+change",
+      skills: "",
+      config: cfg(),
+      existingOpenThreads: [],
+      retryFeedback: "AI reviewer returned malformed JSON.",
+    };
+
+    const out = buildReviewPrompt(context);
+    expect(out).toContain("# Previous response was rejected");
+    expect(out).toContain("AI reviewer returned malformed JSON.");
+    expect(out).toContain("Return a corrected final JSON envelope");
+  });
 });

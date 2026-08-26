@@ -421,9 +421,10 @@ async function completeReview(
       };
 
       let result: ReviewResult | undefined;
+      let attemptContext = ctx;
       for (let attempt = 1; attempt <= MAX_PROVIDER_OUTPUT_ATTEMPTS; attempt++) {
         try {
-          result = await provider.review(ctx, onProgress, executionController.signal);
+          result = await provider.review(attemptContext, onProgress, executionController.signal);
           break;
         } catch (error) {
           if (!(error instanceof ReviewOutputParseError)) throw error;
@@ -437,6 +438,7 @@ async function completeReview(
             type: "log",
             data: `[reviewer] ${error.message} Retrying the provider once.\n`,
           });
+          attemptContext = { ...ctx, retryFeedback: error.message };
         }
       }
       if (!result) throw new Error("AI reviewer produced no validated result.");
