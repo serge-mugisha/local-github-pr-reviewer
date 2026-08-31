@@ -189,4 +189,23 @@ describe("durable operation snapshots", () => {
     expect(afterComment).not.toBe(initial);
     expect(otherProvider).not.toBe(afterComment);
   });
+
+  it("keeps identical reply keys stable across comments created by the reply", () => {
+    const input = {
+      headSha: "head",
+      providerId: "claude",
+      contextVersion: "open:1",
+      message: "please explain",
+    };
+    const first = threadActionIdempotencyKey("reply", 12, input);
+    const completedRetry = threadActionIdempotencyKey("reply", 12, {
+      ...input,
+      contextVersion: "open:3",
+    });
+
+    expect(completedRetry).toBe(first);
+    expect(
+      threadActionIdempotencyKey("reply", 12, { ...input, message: "different question" }),
+    ).not.toBe(first);
+  });
 });

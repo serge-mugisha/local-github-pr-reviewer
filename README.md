@@ -192,7 +192,8 @@ matches the current PR head.
 
 Terminal failures release their semantic idempotency key. After correcting the reported cause,
 repeat the original tool call once to create a fresh operation. Use `forceNew` only to intentionally
-start another pass for an unchanged head and configuration, such as after resolving prior findings.
+start another pass for a genuinely unchanged snapshot, such as re-running a clean review at the
+same head. Reply callers can use it to intentionally repeat an otherwise identical message.
 
 **For Antigravity** (`.gemini/config/config.json`):
 

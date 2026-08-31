@@ -1,6 +1,7 @@
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { migrateDatabase } from "./db.js";
+import { getThreadActionContextVersion, threadActionIdempotencyKey } from "./operations.js";
 import {
   appendWorkEvent,
   claimWorkItem,
@@ -14,6 +15,7 @@ import {
   listWorkEvents,
   listWorkItems,
   pruneFinishedWorkEvents,
+  pruneExpiredWorkItems,
   reconcileInterruptedWorkItems,
   resolveWorkerLaunch,
   resolveSupervisorLaunch,
@@ -327,19 +329,31 @@ describe("durable Reviewer work queue", () => {
          VALUES (7, 1, 'open', 'head-sha', 'head-sha', '2026-01-01T00:00:00.000Z')`,
       )
       .run();
+    const keyForCurrentContext = () =>
+      threadActionIdempotencyKey("reply", 7, {
+        headSha: "head-sha",
+        providerId: "test",
+        contextVersion: getThreadActionContextVersion(7),
+        message: "please explain",
+      });
+    const firstKey = keyForCurrentContext();
     const first = enqueueReplyWork(7, "please explain", "head-sha", {
-      idempotencyKey: "reply-7-head-message",
+      providerId: "test",
+      idempotencyKey: firstKey,
     });
     const claim = claimWorkItem(first.workId)!;
     completeWorkItem(first.workId, claim.workerToken, { actionId: 9 });
+    const retryKey = keyForCurrentContext();
     const second = enqueueReplyWork(7, "please explain", "head-sha", {
-      idempotencyKey: "reply-7-head-message",
+      providerId: "test",
+      idempotencyKey: retryKey,
     });
     const comments = mocks.db
       .prepare("SELECT author, body, head_sha FROM comments WHERE thread_id = ?")
       .all(7);
 
     expect(second).toEqual({ workId: first.workId, created: false });
+    expect(retryKey).toBe(firstKey);
     expect(comments).toEqual([{ author: "user", body: "please explain", head_sha: "head-sha" }]);
   });
 
@@ -435,5 +449,28 @@ describe("durable Reviewer work queue", () => {
 
     expect(pruneFinishedWorkEvents()).toBe(1);
     expect(listWorkEvents(queued.workId)).toEqual([]);
+  });
+
+  it("prunes only expired terminal operations and cascades their events", () => {
+    const expired = enqueueWork({ kind: "review", prId: 124 });
+    const retained = enqueueWork({ kind: "review", prId: 125 });
+    const active = enqueueWork({ kind: "review", prId: 126 });
+    for (const operation of [expired, retained]) {
+      const claim = claimWorkItem(operation.workId)!;
+      appendWorkEvent(operation.workId, { type: "log", data: "progress" });
+      completeWorkItem(operation.workId, claim.workerToken, {});
+    }
+    mocks.db
+      .prepare("UPDATE work_items SET expires_at = '2000-01-01T00:00:00.000Z' WHERE id IN (?, ?)")
+      .run(expired.workId, active.workId);
+    mocks.db
+      .prepare("UPDATE work_items SET expires_at = '2999-01-01T00:00:00.000Z' WHERE id = ?")
+      .run(retained.workId);
+
+    expect(pruneExpiredWorkItems()).toBe(1);
+    expect(getWorkItem(expired.workId)).toBeUndefined();
+    expect(listWorkEvents(expired.workId)).toEqual([]);
+    expect(getWorkItem(retained.workId)?.status).toBe("done");
+    expect(getWorkItem(active.workId)?.status).toBe("queued");
   });
 });

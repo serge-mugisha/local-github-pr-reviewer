@@ -55,7 +55,8 @@ After correcting the cause of a terminal failure, repeat the original tool call 
 operations release their semantic key, so the retry creates a fresh durable operation.
 
 Use `forceNew` only when intentionally requesting another pass for an unchanged head and review
-configuration, such as after resolving every finding from a completed review.
+configuration, such as re-running a clean review at the same head. For replies, use it only to
+intentionally repeat an otherwise identical message.
 
 ## Guardrails
 

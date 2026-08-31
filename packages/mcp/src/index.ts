@@ -884,7 +884,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
             presetId: z.number().int().positive().optional(),
             expectedHeadSha: z
               .string()
-              .regex(/^[0-9a-f]{40}$/i)
+              .regex(/^[0-9a-f]{40}$/)
               .optional(),
             forceNew: z.boolean().default(false),
           })

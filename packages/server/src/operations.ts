@@ -141,7 +141,15 @@ export function threadActionIdempotencyKey(
     message?: string;
   },
 ): string {
-  return `${kind}:${threadId}:${hash(input)}`;
+  // A reply persists its own user and AI comments, so conversation-versioning
+  // that key would make an exact completed retry look new. forceNew remains the
+  // explicit way to intentionally repeat the same message. Revalidation has no
+  // such self-authored input and should track the live conversation version.
+  const semanticInput =
+    kind === "reply"
+      ? { headSha: input.headSha, providerId: input.providerId, message: input.message }
+      : input;
+  return `${kind}:${threadId}:${hash(semanticInput)}`;
 }
 
 export function getThreadActionContextVersion(threadId: number): string {
