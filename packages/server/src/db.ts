@@ -300,19 +300,6 @@ export function migrateDatabase(db: Database.Database): void {
         db.exec(`ALTER TABLE work_items ADD COLUMN ${column} ${definition}`);
       }
     }
-    const idempotencyIndex = db
-      .prepare(
-        "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'idx_work_items_idempotency'",
-      )
-      .get() as { sql: string | null } | undefined;
-    // Pre-release durable-operation builds used the same index name without
-    // releasing failed keys. Replace that definition once, not on every worker start.
-    if (
-      idempotencyIndex?.sql &&
-      !idempotencyIndex.sql.includes("status IN ('queued', 'running', 'done')")
-    ) {
-      db.exec("DROP INDEX idx_work_items_idempotency");
-    }
     db.exec(`
       CREATE UNIQUE INDEX IF NOT EXISTS idx_work_items_idempotency
         ON work_items(idempotency_key)

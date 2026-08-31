@@ -194,14 +194,10 @@ describe("durable operation snapshots", () => {
     const input = {
       headSha: "head",
       providerId: "claude",
-      contextVersion: "open:1",
       message: "please explain",
     };
     const first = threadActionIdempotencyKey("reply", 12, input);
-    const completedRetry = threadActionIdempotencyKey("reply", 12, {
-      ...input,
-      contextVersion: "open:3",
-    });
+    const completedRetry = threadActionIdempotencyKey("reply", 12, input);
 
     expect(completedRetry).toBe(first);
     expect(

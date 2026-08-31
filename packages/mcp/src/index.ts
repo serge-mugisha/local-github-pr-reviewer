@@ -961,7 +961,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
         const repo = requireRepo(pr.repo_id);
         const refreshed = await api.hydratePR(repo, pr.number);
         const providerId = api.resolveReviewerProvider(repo, refreshed).provider;
-        const contextVersion = api.getThreadActionContextVersion(threadId);
         const queued = api.enqueueReplyWork(threadId, message, refreshed.head_sha, {
           providerId,
           idempotencyKey: forceNew
@@ -969,7 +968,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
             : api.threadActionIdempotencyKey("reply", threadId, {
                 headSha: refreshed.head_sha,
                 providerId,
-                contextVersion,
                 message,
               }),
         });

@@ -1,7 +1,7 @@
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { migrateDatabase } from "./db.js";
-import { getThreadActionContextVersion, threadActionIdempotencyKey } from "./operations.js";
+import { threadActionIdempotencyKey } from "./operations.js";
 import {
   appendWorkEvent,
   claimWorkItem,
@@ -333,7 +333,6 @@ describe("durable Reviewer work queue", () => {
       threadActionIdempotencyKey("reply", 7, {
         headSha: "head-sha",
         providerId: "test",
-        contextVersion: getThreadActionContextVersion(7),
         message: "please explain",
       });
     const firstKey = keyForCurrentContext();
@@ -359,7 +358,6 @@ describe("durable Reviewer work queue", () => {
     const failureKey = threadActionIdempotencyKey("reply", 7, {
       headSha: "head-sha",
       providerId: "test",
-      contextVersion: getThreadActionContextVersion(7),
       message: "retry after failure",
     });
     const failed = enqueueReplyWork(7, "retry after failure", "head-sha", {

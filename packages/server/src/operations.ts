@@ -137,7 +137,7 @@ export function threadActionIdempotencyKey(
   input: {
     headSha: string;
     providerId: string;
-    contextVersion: string;
+    contextVersion?: string;
     message?: string;
   },
 ): string {
@@ -145,10 +145,10 @@ export function threadActionIdempotencyKey(
   // that key would make an exact completed retry look new. forceNew remains the
   // explicit way to intentionally repeat the same message. Revalidation has no
   // such self-authored input and should track the live conversation version.
-  const semanticInput =
-    kind === "reply"
-      ? { headSha: input.headSha, providerId: input.providerId, message: input.message }
-      : input;
+  if (kind === "revalidate" && !input.contextVersion) {
+    throw new Error("Revalidation idempotency requires a conversation context version.");
+  }
+  const semanticInput = kind === "reply" ? { ...input, contextVersion: undefined } : input;
   return `${kind}:${threadId}:${hash(semanticInput)}`;
 }
 

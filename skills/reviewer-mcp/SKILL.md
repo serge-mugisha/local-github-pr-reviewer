@@ -1,6 +1,6 @@
 ---
 name: reviewer-mcp
-description: Use the local GitHub PR Reviewer MCP for exact-head AI self-review, durable operation waiting, thread disposition, and final gate validation.
+description: Automatically use the local GitHub PR Reviewer MCP after an agent opens or materially updates a PR in a registered repository, or whenever Reviewer is requested; covers exact-head AI self-review, durable operation waiting, thread disposition, and final gate validation.
 ---
 
 # Reviewer MCP
