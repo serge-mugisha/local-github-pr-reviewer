@@ -274,12 +274,22 @@ export function enqueueReplyWork(
     {
       idempotencyKey: options.idempotencyKey,
       beforeCreate: () => {
-        getDb()
+        const db = getDb();
+        const latest = db
           .prepare(
-            `INSERT INTO comments (thread_id, author, body, head_sha, kind, created_at)
-             VALUES (?, 'user', ?, ?, 'normal', ?)`,
+            `SELECT author, body, head_sha
+             FROM comments WHERE thread_id = ? ORDER BY id DESC LIMIT 1`,
           )
-          .run(threadId, message, headSha, now());
+          .get(threadId) as { author: string; body: string; head_sha: string } | undefined;
+        // A terminally failed reply releases its operation key for one safe
+        // retry, but its user input was already persisted transactionally.
+        if (latest?.author === "user" && latest.body === message && latest.head_sha === headSha) {
+          return;
+        }
+        db.prepare(
+          `INSERT INTO comments (thread_id, author, body, head_sha, kind, created_at)
+             VALUES (?, 'user', ?, ?, 'normal', ?)`,
+        ).run(threadId, message, headSha, now());
       },
     },
   );

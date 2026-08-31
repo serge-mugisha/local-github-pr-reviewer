@@ -355,6 +355,29 @@ describe("durable Reviewer work queue", () => {
     expect(second).toEqual({ workId: first.workId, created: false });
     expect(retryKey).toBe(firstKey);
     expect(comments).toEqual([{ author: "user", body: "please explain", head_sha: "head-sha" }]);
+
+    const failureKey = threadActionIdempotencyKey("reply", 7, {
+      headSha: "head-sha",
+      providerId: "test",
+      contextVersion: getThreadActionContextVersion(7),
+      message: "retry after failure",
+    });
+    const failed = enqueueReplyWork(7, "retry after failure", "head-sha", {
+      providerId: "test",
+      idempotencyKey: failureKey,
+    });
+    const failedClaim = claimWorkItem(failed.workId)!;
+    failWorkItem(failed.workId, failedClaim.workerToken, new Error("provider unavailable"));
+    const failureRetry = enqueueReplyWork(7, "retry after failure", "head-sha", {
+      providerId: "test",
+      idempotencyKey: failureKey,
+    });
+    expect(failureRetry.created).toBe(true);
+    expect(
+      mocks.db
+        .prepare("SELECT COUNT(*) AS count FROM comments WHERE thread_id = 7 AND body = ?")
+        .get("retry after failure"),
+    ).toEqual({ count: 1 });
   });
 
   it("requeues a task whose worker disappeared and fences its stale token", () => {

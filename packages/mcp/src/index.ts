@@ -671,6 +671,23 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
         const pr = requirePr(prId);
         api.reconcileInterruptedReviews();
         const review = api.getLatestReviewForPR(prId);
+        const latestOperation = api.getLatestOperation("review", prId);
+        const compactOperation = latestOperation
+          ? {
+              ...latestOperation,
+              ...(latestOperation.review
+                ? {
+                    review: {
+                      reviewId: latestOperation.review.reviewId,
+                      reviewedHeadSha: latestOperation.review.reviewedHeadSha,
+                      currentHeadSha: latestOperation.review.currentHeadSha,
+                      gate: latestOperation.review.gate,
+                      summary: latestOperation.review.summary,
+                    },
+                  }
+                : {}),
+            }
+          : undefined;
         return {
           content: [
             {
@@ -679,7 +696,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
                 {
                   pr,
                   review,
-                  latestOperation: api.getLatestOperation("review", prId),
+                  latestOperation: compactOperation,
                   threads: api.listThreadsForPR(prId),
                 },
                 null,
