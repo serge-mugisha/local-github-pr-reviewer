@@ -8,12 +8,15 @@ import {
   enqueueReplyWork,
   enqueueWork,
   ensureWorkItemRunning,
+  findLatestWorkItem,
   getWorkItem,
   listWorkEvents,
+  listWorkItems,
   pruneFinishedWorkEvents,
   reconcileInterruptedWorkItems,
   resolveWorkerLaunch,
   waitForWorkItem,
+  type ReviewExecutionSnapshot,
 } from "./workQueue.js";
 
 const mocks = vi.hoisted(() => ({
@@ -52,6 +55,43 @@ afterEach(() => {
   vi.restoreAllMocks();
   mocks.db.close();
 });
+
+function reviewSnapshot(configFingerprint: string, updatedAt: string): ReviewExecutionSnapshot {
+  return {
+    pr: {
+      id: 42,
+      repo_id: 1,
+      number: 25,
+      title: "Durable operations",
+      body: "",
+      head_sha: "head",
+      base_sha: "base",
+      head_ref: "feature",
+      base_ref: "main",
+      state: "OPEN",
+      url: "https://example.test/pr/25",
+      author: "tester",
+      assignees: "[]",
+      review_requests: "[]",
+      created_at: "2026-01-01T00:00:00.000Z",
+      updated_at: updatedAt,
+      reviewer_provider: null,
+    },
+    providerId: "test",
+    skills: "",
+    config: {
+      categories: [],
+      strictness: "balanced",
+      globalRules: "",
+      repoRules: "",
+      perPrRules: "",
+      pathInclude: "",
+      pathExclude: "",
+    },
+    openThreads: [],
+    configFingerprint,
+  };
+}
 
 describe("durable Reviewer work queue", () => {
   it("deduplicates active requests before launching detached workers", () => {
@@ -149,6 +189,52 @@ describe("durable Reviewer work queue", () => {
 
     expect(retry).toEqual({ workId: first.workId, created: false });
     expect(mocks.spawn).toHaveBeenCalledTimes(2);
+  });
+
+  it("joins semantically identical reviews despite volatile PR metadata", () => {
+    const first = enqueueWork(
+      { kind: "review", prId: 42, snapshot: reviewSnapshot("same-input", "old") },
+      { idempotencyKey: "review:42:same-input" },
+    );
+    const activeRetry = enqueueWork({
+      kind: "review",
+      prId: 42,
+      snapshot: reviewSnapshot("same-input", "new"),
+    });
+    expect(activeRetry).toEqual({ workId: first.workId, created: false });
+
+    const claim = claimWorkItem(first.workId)!;
+    completeWorkItem(first.workId, claim.workerToken, { reviewId: 7 });
+    const completedRetry = enqueueWork(
+      { kind: "review", prId: 42, snapshot: reviewSnapshot("same-input", "newer") },
+      { idempotencyKey: "review:42:same-input" },
+    );
+    expect(completedRetry).toEqual({ workId: first.workId, created: false });
+  });
+
+  it("reports the PR when a different review is already active", () => {
+    enqueueWork({
+      kind: "review",
+      prId: 42,
+      snapshot: reviewSnapshot("first-input", "old"),
+    });
+
+    expect(() =>
+      enqueueWork({
+        kind: "review",
+        prId: 42,
+        snapshot: reviewSnapshot("different-input", "new"),
+      }),
+    ).toThrow("PR 42 already has another active Reviewer action");
+  });
+
+  it("keeps status lookups read-only", () => {
+    const queued = enqueueWork({ kind: "review", prId: 77 });
+    mocks.db.pragma("query_only = ON");
+
+    expect(getWorkItem(queued.workId)?.id).toBe(queued.workId);
+    expect(listWorkItems()).toHaveLength(1);
+    expect(findLatestWorkItem("review", 77)?.id).toBe(queued.workId);
   });
 
   it("allows only one process to claim and publish a queued item", () => {

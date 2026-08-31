@@ -78,14 +78,12 @@ function dedupeKey(payload: WorkPayload): string {
 }
 
 export function getWorkItem(workId: string): WorkItemRow | undefined {
-  pruneExpiredWorkItems();
   return getDb().prepare("SELECT * FROM work_items WHERE id = ?").get(workId) as
     | WorkItemRow
     | undefined;
 }
 
 export function listWorkItems(): WorkItemRow[] {
-  pruneExpiredWorkItems();
   return getDb()
     .prepare("SELECT * FROM work_items ORDER BY created_at DESC")
     .all() as WorkItemRow[];
@@ -95,7 +93,6 @@ export function findLatestWorkItem(
   kind: WorkPayload["kind"],
   targetId: number,
 ): WorkItemRow | undefined {
-  pruneExpiredWorkItems();
   return getDb()
     .prepare(
       "SELECT * FROM work_items WHERE kind = ? AND target_id = ? ORDER BY created_at DESC LIMIT 1",
@@ -190,6 +187,7 @@ function operationMetadata(payload: WorkPayload): {
 export function enqueueWork(payload: WorkPayload, options: EnqueueWorkOptions = {}): EnqueuedWork {
   const db = getDb();
   const key = dedupeKey(payload);
+  const metadata = operationMetadata(payload);
   const result = db
     .transaction(() => {
       pruneFinishedWorkEvents();
@@ -198,33 +196,35 @@ export function enqueueWork(payload: WorkPayload, options: EnqueueWorkOptions = 
       const serializedPayload = JSON.stringify(payload);
       if (options.idempotencyKey) {
         const existing = db
-          .prepare("SELECT id, payload FROM work_items WHERE idempotency_key = ?")
-          .get(options.idempotencyKey) as { id: string; payload: string } | undefined;
+          .prepare("SELECT id FROM work_items WHERE idempotency_key = ?")
+          .get(options.idempotencyKey) as { id: string } | undefined;
         if (existing) {
-          if (existing.payload !== serializedPayload) {
-            throw new Error("Reviewer idempotency key was already used for different input.");
-          }
           return { workId: existing.id, created: false };
         }
       }
       const active = db
         .prepare(
-          `SELECT id, payload FROM work_items
+          `SELECT id, payload, config_fingerprint FROM work_items
            WHERE dedupe_key = ? AND status IN ('queued', 'running')
            ORDER BY created_at DESC LIMIT 1`,
         )
-        .get(key) as { id: string; payload: string } | undefined;
+        .get(key) as { id: string; payload: string; config_fingerprint: string | null } | undefined;
       if (active) {
-        if (active.payload === serializedPayload) {
+        const sameReviewInput =
+          payload.kind === "review" &&
+          metadata.configFingerprint !== null &&
+          active.config_fingerprint === metadata.configFingerprint;
+        if (active.payload === serializedPayload || sameReviewInput) {
           return { workId: active.id, created: false };
         }
+        const target =
+          payload.kind === "review" ? `PR ${payload.prId}` : `Thread ${payload.threadId}`;
         throw new Error(
-          `Thread ${"threadId" in payload ? payload.threadId : "unknown"} already has another active Reviewer action. Wait for its task result before starting a new one.`,
+          `${target} already has another active Reviewer action. Wait for its task result before starting a new one.`,
         );
       }
       options.beforeCreate?.();
       const workId = randomUUID();
-      const metadata = operationMetadata(payload);
       db.prepare(
         `INSERT INTO work_items
            (id, kind, dedupe_key, payload, status, created_at, target_id, head_sha,
@@ -351,6 +351,7 @@ export function launchQueueSupervisor(): void {
 }
 
 export async function superviseWorkQueue(): Promise<void> {
+  pruneExpiredWorkItems();
   for (;;) {
     reconcileInterruptedWorkItems();
     const active = listWorkItems().filter(

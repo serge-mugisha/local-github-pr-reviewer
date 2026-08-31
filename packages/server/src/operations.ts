@@ -110,8 +110,14 @@ export async function createReviewExecutionSnapshot(
   };
   const openThreads = loadOpenThreadContext(refreshed.id);
   const configFingerprint = hash({
-    headSha: refreshed.head_sha,
-    baseSha: refreshed.base_sha,
+    pr: {
+      id: refreshed.id,
+      number: refreshed.number,
+      title: refreshed.title,
+      body: refreshed.body,
+      headSha: refreshed.head_sha,
+      baseSha: refreshed.base_sha,
+    },
     providerId,
     skills,
     config,
@@ -127,10 +133,28 @@ export function reviewIdempotencyKey(snapshot: ReviewExecutionSnapshot): string 
 export function threadActionIdempotencyKey(
   kind: "reply" | "revalidate",
   threadId: number,
-  headSha: string,
-  input = "",
+  input: {
+    headSha: string;
+    providerId: string;
+    contextVersion: string;
+    message?: string;
+  },
 ): string {
-  return `${kind}:${threadId}:${hash({ headSha, input })}`;
+  return `${kind}:${threadId}:${hash(input)}`;
+}
+
+export function getThreadActionContextVersion(threadId: number): string {
+  const row = getDb()
+    .prepare(
+      `SELECT t.status, COALESCE(MAX(c.id), 0) AS latest_comment_id
+       FROM threads t
+       LEFT JOIN comments c ON c.thread_id = t.id
+       WHERE t.id = ?
+       GROUP BY t.id`,
+    )
+    .get(threadId) as { status: string; latest_comment_id: number } | undefined;
+  if (!row) throw new Error(`Thread ${threadId} not found.`);
+  return `${row.status}:${row.latest_comment_id}`;
 }
 
 function canonicalStatus(status: WorkItemRow["status"]): OperationStatus {

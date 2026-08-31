@@ -1,7 +1,12 @@
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { migrateDatabase, type WorkItemRow } from "./db.js";
-import { operationSnapshot, waitOperation } from "./operations.js";
+import {
+  getThreadActionContextVersion,
+  operationSnapshot,
+  threadActionIdempotencyKey,
+  waitOperation,
+} from "./operations.js";
 
 const mocks = vi.hoisted(() => ({
   db: undefined as unknown as Database.Database,
@@ -119,5 +124,40 @@ describe("durable operation snapshots", () => {
 
     mocks.db.prepare("UPDATE prs SET head_sha = 'new-head' WHERE id = 5").run();
     expect(operationSnapshot(row).review?.gate).toBe("stale");
+  });
+
+  it("versions thread actions by provider and live conversation context", () => {
+    mocks.db
+      .prepare(
+        `INSERT INTO threads
+         (id, pr_id, status, first_seen_sha, last_seen_sha, created_at)
+         VALUES (12, 5, 'open', 'head', 'head', 'now')`,
+      )
+      .run();
+    const initialContext = getThreadActionContextVersion(12);
+    const initial = threadActionIdempotencyKey("revalidate", 12, {
+      headSha: "head",
+      providerId: "claude",
+      contextVersion: initialContext,
+    });
+    mocks.db
+      .prepare(
+        `INSERT INTO comments (thread_id, author, body, head_sha, kind, created_at)
+         VALUES (12, 'user', 'more context', 'head', 'normal', 'now')`,
+      )
+      .run();
+    const afterComment = threadActionIdempotencyKey("revalidate", 12, {
+      headSha: "head",
+      providerId: "claude",
+      contextVersion: getThreadActionContextVersion(12),
+    });
+    const otherProvider = threadActionIdempotencyKey("revalidate", 12, {
+      headSha: "head",
+      providerId: "codex",
+      contextVersion: getThreadActionContextVersion(12),
+    });
+
+    expect(afterComment).not.toBe(initial);
+    expect(otherProvider).not.toBe(afterComment);
   });
 });

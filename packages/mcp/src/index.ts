@@ -931,11 +931,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
         const repo = requireRepo(pr.repo_id);
         const refreshed = await api.hydratePR(repo, pr.number);
         const providerId = api.resolveReviewerProvider(repo, refreshed).provider;
+        const contextVersion = api.getThreadActionContextVersion(threadId);
         const queued = api.enqueueReplyWork(threadId, message, refreshed.head_sha, {
           providerId,
           idempotencyKey: forceNew
             ? undefined
-            : api.threadActionIdempotencyKey("reply", threadId, refreshed.head_sha, message),
+            : api.threadActionIdempotencyKey("reply", threadId, {
+                headSha: refreshed.head_sha,
+                providerId,
+                contextVersion,
+                message,
+              }),
         });
         if (taskMode(request)) return { task: taskFromWork(api.getWorkItem(queued.workId)!) };
         return structuredResult(
@@ -954,12 +960,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
         const repo = requireRepo(pr.repo_id);
         const refreshed = await api.hydratePR(repo, pr.number);
         const providerId = api.resolveReviewerProvider(repo, refreshed).provider;
+        const contextVersion = api.getThreadActionContextVersion(threadId);
         const queued = api.enqueueWork(
           { kind: "revalidate", threadId, headSha: refreshed.head_sha, providerId },
           {
             idempotencyKey: forceNew
               ? undefined
-              : api.threadActionIdempotencyKey("revalidate", threadId, refreshed.head_sha),
+              : api.threadActionIdempotencyKey("revalidate", threadId, {
+                  headSha: refreshed.head_sha,
+                  providerId,
+                  contextVersion,
+                }),
           },
         );
         if (taskMode(request)) return { task: taskFromWork(api.getWorkItem(queued.workId)!) };
