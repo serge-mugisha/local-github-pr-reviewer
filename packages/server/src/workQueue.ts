@@ -23,6 +23,7 @@ const LAUNCH_RETRY_AFTER_MS = 5_000;
 const POLL_INTERVAL_MS = 250;
 const FINISHED_EVENT_RETENTION_MS = 24 * 60 * 60 * 1_000;
 const FINISHED_WORK_RETENTION_MS = 24 * 60 * 60 * 1_000;
+const SUPERVISOR_STALE_AFTER_MS = 5_000;
 
 export interface ReviewThreadSnapshot {
   id: number;
@@ -87,6 +88,14 @@ export function listWorkItems(): WorkItemRow[] {
   return getDb()
     .prepare("SELECT * FROM work_items ORDER BY created_at DESC")
     .all() as WorkItemRow[];
+}
+
+function listActiveWorkIds(): string[] {
+  return (
+    getDb().prepare("SELECT id FROM work_items WHERE status IN ('queued', 'running')").all() as {
+      id: string;
+    }[]
+  ).map((row) => row.id);
 }
 
 export function findLatestWorkItem(
@@ -353,21 +362,57 @@ export function launchQueueSupervisor(): void {
   child.unref();
 }
 
-export async function superviseWorkQueue(): Promise<void> {
-  pruneExpiredWorkItems();
-  for (;;) {
-    reconcileInterruptedWorkItems();
-    const active = listWorkItems().filter(
-      (work) => work.status === "queued" || work.status === "running",
-    );
-    if (active.length === 0) return;
-    for (const work of active) ensureWorkItemRunning(work.id);
-    await new Promise((resolve) => setTimeout(resolve, 1_000));
+function acquireSupervisorLease(token: string): boolean {
+  const timestamp = now();
+  const staleBefore = new Date(Date.now() - SUPERVISOR_STALE_AFTER_MS).toISOString();
+  const row = getDb()
+    .prepare(
+      `INSERT INTO queue_supervisor_lease (id, token, heartbeat_at)
+       VALUES (1, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET token = excluded.token, heartbeat_at = excluded.heartbeat_at
+       WHERE queue_supervisor_lease.heartbeat_at < ?
+       RETURNING token`,
+    )
+    .get(token, timestamp, staleBefore) as { token: string } | undefined;
+  return row?.token === token;
+}
+
+function heartbeatSupervisorLease(token: string): boolean {
+  return (
+    getDb()
+      .prepare("UPDATE queue_supervisor_lease SET heartbeat_at = ? WHERE id = 1 AND token = ?")
+      .run(now(), token).changes === 1
+  );
+}
+
+function releaseSupervisorLease(token: string): void {
+  getDb().prepare("DELETE FROM queue_supervisor_lease WHERE id = 1 AND token = ?").run(token);
+}
+
+export async function superviseWorkQueue(pollIntervalMs = 1_000): Promise<void> {
+  const token = randomUUID();
+  if (!acquireSupervisorLease(token)) return;
+  try {
+    pruneExpiredWorkItems();
+    for (;;) {
+      if (!heartbeatSupervisorLease(token)) return;
+      reconcileInterruptedWorkItems();
+      const activeIds = listActiveWorkIds();
+      if (activeIds.length === 0) return;
+      for (const workId of activeIds) ensureWorkItemRunningWithoutReconcile(workId);
+      await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+    }
+  } finally {
+    releaseSupervisorLease(token);
   }
 }
 
 export function ensureWorkItemRunning(workId: string): WorkItemRow {
   reconcileInterruptedWorkItems();
+  return ensureWorkItemRunningWithoutReconcile(workId);
+}
+
+function ensureWorkItemRunningWithoutReconcile(workId: string): WorkItemRow {
   let work = getWorkItem(workId);
   if (!work) throw new Error(`Reviewer work item ${workId} not found.`);
   if (work.status === "queued") {

@@ -882,7 +882,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
           .object({
             prId: z.number(),
             presetId: z.number().int().positive().optional(),
-            expectedHeadSha: z.string().min(7).optional(),
+            expectedHeadSha: z
+              .string()
+              .regex(/^[0-9a-f]{40}$/i)
+              .optional(),
             forceNew: z.boolean().default(false),
           })
           .parse(request.params.arguments);
@@ -918,9 +921,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
               : undefined,
           },
         );
-        if (taskMode(request)) return { task: taskFromWork(api.getWorkItem(queued.workId)!) };
+        const work = api.getWorkItem(queued.workId)!;
+        if (taskMode(request)) return { task: taskFromWork(work) };
         return structuredResult(
-          api.operationSnapshot(api.getWorkItem(queued.workId)!, queued.created),
+          api.operationSnapshot(work, queued.created),
+          work.status === "error" || work.status === "cancelled",
         );
       }
       case "reply_to_thread": {
@@ -951,9 +956,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
                 message,
               }),
         });
-        if (taskMode(request)) return { task: taskFromWork(api.getWorkItem(queued.workId)!) };
+        const work = api.getWorkItem(queued.workId)!;
+        if (taskMode(request)) return { task: taskFromWork(work) };
         return structuredResult(
-          api.operationSnapshot(api.getWorkItem(queued.workId)!, queued.created),
+          api.operationSnapshot(work, queued.created),
+          work.status === "error" || work.status === "cancelled",
         );
       }
       case "revalidate_thread": {
@@ -981,9 +988,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
                 }),
           },
         );
-        if (taskMode(request)) return { task: taskFromWork(api.getWorkItem(queued.workId)!) };
+        const work = api.getWorkItem(queued.workId)!;
+        if (taskMode(request)) return { task: taskFromWork(work) };
         return structuredResult(
-          api.operationSnapshot(api.getWorkItem(queued.workId)!, queued.created),
+          api.operationSnapshot(work, queued.created),
+          work.status === "error" || work.status === "cancelled",
         );
       }
       case "get_thread_action": {

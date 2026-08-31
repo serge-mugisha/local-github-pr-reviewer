@@ -191,7 +191,8 @@ No extended MCP timeout is required. `trigger_review`, `reply_to_thread`, and
 matches the current PR head.
 
 Terminal failures release their semantic idempotency key. After correcting the reported cause,
-repeat the original tool call once to create a fresh operation; no `forceNew` escape hatch is needed.
+repeat the original tool call once to create a fresh operation. Use `forceNew` only to intentionally
+start another pass for an unchanged head and configuration, such as after resolving prior findings.
 
 **For Antigravity** (`.gemini/config/config.json`):
 

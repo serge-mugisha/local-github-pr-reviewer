@@ -16,6 +16,8 @@ import {
   pruneFinishedWorkEvents,
   reconcileInterruptedWorkItems,
   resolveWorkerLaunch,
+  resolveSupervisorLaunch,
+  superviseWorkQueue,
   waitForWorkItem,
   type ReviewExecutionSnapshot,
 } from "./workQueue.js";
@@ -94,6 +96,10 @@ function reviewSnapshot(configFingerprint: string, updatedAt: string): ReviewExe
   };
 }
 
+function workerSpawnCount(workId: string): number {
+  return mocks.spawn.mock.calls.filter((call) => (call[1] as unknown[]).includes(workId)).length;
+}
+
 describe("durable Reviewer work queue", () => {
   it("deduplicates active requests before launching detached workers", () => {
     const first = enqueueWork({ kind: "review", prId: 42 });
@@ -101,7 +107,7 @@ describe("durable Reviewer work queue", () => {
 
     expect(first.created).toBe(true);
     expect(second).toEqual({ workId: first.workId, created: false });
-    expect(mocks.spawn).toHaveBeenCalledTimes(2);
+    expect(workerSpawnCount(first.workId)).toBe(1);
     expect(mocks.spawn).toHaveBeenCalledWith(
       process.execPath,
       expect.arrayContaining([first.workId]),
@@ -123,6 +129,20 @@ describe("durable Reviewer work queue", () => {
       expect.stringMatching(/worker\.ts$/),
       "dev-work",
     ]);
+  });
+
+  it("resolves compiled and source supervisor entrypoints", () => {
+    expect(resolveSupervisorLaunch((path) => path.endsWith("supervisor.js"))).toEqual({
+      command: process.execPath,
+      args: [expect.stringMatching(/supervisor\.js$/)],
+    });
+    expect(resolveSupervisorLaunch((path) => path.endsWith("supervisor.ts"))).toEqual({
+      command: process.execPath,
+      args: [expect.stringContaining("tsx/dist/cli.mjs"), expect.stringMatching(/supervisor\.ts$/)],
+    });
+    expect(() => resolveSupervisorLaunch(() => false)).toThrow(
+      "Reviewer supervisor entrypoint is missing",
+    );
   });
 
   it("persists provider progress for reconnecting UI consumers", () => {
@@ -189,7 +209,7 @@ describe("durable Reviewer work queue", () => {
     );
 
     expect(retry).toEqual({ workId: first.workId, created: false });
-    expect(mocks.spawn).toHaveBeenCalledTimes(2);
+    expect(workerSpawnCount(first.workId)).toBe(1);
   });
 
   it("releases an idempotency key after terminal failure", () => {
@@ -340,6 +360,44 @@ describe("durable Reviewer work queue", () => {
     expect(() => completeWorkItem(queued.workId, claim.workerToken, {})).toThrow(
       "lost its worker lease",
     );
+  });
+
+  it("recovers a stale worker through the independent queue supervisor", async () => {
+    const queued = enqueueWork({ kind: "review", prId: 10 });
+    claimWorkItem(queued.workId);
+    mocks.db
+      .prepare("UPDATE work_items SET heartbeat_at = ? WHERE id = ?")
+      .run("2000-01-01T00:00:00.000Z", queued.workId);
+    mocks.spawn.mockReset();
+    mocks.spawn.mockImplementation((_command: string, args: unknown[]) => {
+      if (args.includes(queued.workId)) {
+        const recovered = claimWorkItem(queued.workId)!;
+        completeWorkItem(queued.workId, recovered.workerToken, { recovered: true });
+      }
+    });
+
+    await superviseWorkQueue(0);
+
+    expect(workerSpawnCount(queued.workId)).toBe(1);
+    expect(getWorkItem(queued.workId)).toMatchObject({
+      status: "done",
+      attempt_count: 2,
+      result: JSON.stringify({ recovered: true }),
+    });
+  });
+
+  it("allows only one queue supervisor lease at a time", async () => {
+    const queued = enqueueWork({ kind: "review", prId: 11 });
+    mocks.db
+      .prepare(
+        "INSERT INTO queue_supervisor_lease (id, token, heartbeat_at) VALUES (1, 'other', ?)",
+      )
+      .run(new Date().toISOString());
+    mocks.spawn.mockReset();
+
+    await superviseWorkQueue(0);
+
+    expect(workerSpawnCount(queued.workId)).toBe(0);
   });
 
   it("surfaces a broken worker build instead of spawning forever", () => {

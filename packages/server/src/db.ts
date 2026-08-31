@@ -151,6 +151,14 @@ export function migrateDatabase(db: Database.Database): void {
       created_at TEXT NOT NULL
     );
 
+    -- Cross-process lease for the lightweight recovery supervisor. Every
+    -- enqueue may launch a candidate, but only one candidate polls the queue.
+    CREATE TABLE IF NOT EXISTS queue_supervisor_lease (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      token TEXT NOT NULL,
+      heartbeat_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS skills (
       repo_id INTEGER PRIMARY KEY REFERENCES repos(id) ON DELETE CASCADE,
       body TEXT NOT NULL DEFAULT '',

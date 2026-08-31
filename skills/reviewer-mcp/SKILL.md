@@ -54,11 +54,8 @@ errors include their cause and are never represented as a clean review.
 After correcting the cause of a terminal failure, repeat the original tool call once. Failed
 operations release their semantic key, so the retry creates a fresh durable operation.
 
-After correcting the cause of a terminal failure, repeat the original tool call once. Failed
-operations release their semantic key, so the retry creates a fresh durable operation.
-
-After correcting the cause of a terminal failure, repeat the original tool call once. Failed
-operations release their semantic key, so the retry creates a fresh durable operation.
+Use `forceNew` only when intentionally requesting another pass for an unchanged head and review
+configuration, such as after resolving every finding from a completed review.
 
 ## Guardrails
 
