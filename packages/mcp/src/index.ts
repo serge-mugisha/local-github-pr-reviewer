@@ -79,6 +79,20 @@ const OPERATION_OUTPUT_SCHEMA = {
     target: { type: "object" },
     headSha: { type: ["string", "null"] },
     statusMessage: { type: "string" },
+    error: { type: "string" },
+    result: {},
+    review: {
+      type: "object",
+      properties: {
+        reviewId: { type: "number" },
+        reviewedHeadSha: { type: ["string", "null"] },
+        currentHeadSha: { type: ["string", "null"] },
+        gate: { type: "string", enum: ["pending", "clean", "findings", "stale", "failed"] },
+        summary: { type: ["string", "null"] },
+        findings: { type: "array" },
+        openActionableThreads: { type: "array" },
+      },
+    },
   },
   required: [
     "operationId",
@@ -389,7 +403,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       {
         name: "reply_to_thread",
         description:
-          "Queues a durable local AI reply and immediately returns its operation. Nothing is posted to GitHub.",
+          "Queues a durable local AI reply and immediately returns its operation. Identical completed replies are deduplicated; set forceNew only to intentionally repeat one. Nothing is posted to GitHub.",
         execution: { taskSupport: "optional" },
         outputSchema: OPERATION_OUTPUT_SCHEMA,
         inputSchema: {
@@ -397,7 +411,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           properties: {
             threadId: { type: "number" },
             message: { type: "string" },
-            forceNew: { type: "boolean" },
+            forceNew: {
+              type: "boolean",
+              description: "Intentionally repeat an otherwise identical completed reply",
+            },
           },
           required: ["threadId", "message"],
         },
@@ -412,7 +429,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           type: "object",
           properties: {
             threadId: { type: "number" },
-            forceNew: { type: "boolean" },
+            forceNew: {
+              type: "boolean",
+              description: "Start a new pass even when an identical completed operation exists",
+            },
           },
           required: ["threadId"],
         },

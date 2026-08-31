@@ -228,10 +228,10 @@ describe("startReview", () => {
     expect(mocks.db.prepare("SELECT COUNT(*) AS count FROM threads").get()).toEqual({ count: 0 });
   });
 
-  it("fails closed if the base or head moves while the exact diff is being fetched", async () => {
+  it("fails closed if the head moves while the exact diff is being fetched", async () => {
     mocks.hydrate
       .mockResolvedValueOnce(mocks.pr)
-      .mockResolvedValueOnce({ ...mocks.pr, base_sha: "moved-base" });
+      .mockResolvedValueOnce({ ...mocks.pr, head_sha: "moved-head" });
     const snapshot = {
       pr: mocks.pr,
       providerId: "test",
@@ -256,11 +256,38 @@ describe("startReview", () => {
       snapshot,
     });
 
-    await expect(started.completion).rejects.toThrow("PR changed before review execution");
+    await expect(started.completion).rejects.toThrow("PR head changed before review execution");
     expect(mocks.review).not.toHaveBeenCalled();
     expect(
       mocks.db.prepare("SELECT status FROM reviews WHERE id = ?").get(started.reviewId),
     ).toEqual({ status: "error" });
+  });
+
+  it("keeps reviewing the snapshotted head when only the base branch tip moves", async () => {
+    mocks.hydrate
+      .mockResolvedValueOnce(mocks.pr)
+      .mockResolvedValueOnce({ ...mocks.pr, base_sha: "moved-base" });
+    const snapshot = {
+      pr: mocks.pr,
+      providerId: "test",
+      skills: "",
+      config: {
+        categories: [],
+        strictness: "balanced",
+        globalRules: "",
+        repoRules: "",
+        perPrRules: "",
+        pathInclude: "",
+        pathExclude: "",
+      },
+      openThreads: [],
+      configFingerprint: "fingerprint",
+    };
+
+    const started = startReview({ repo, pr: mocks.pr, providerId: "test", snapshot });
+
+    await expect(started.completion).resolves.toMatchObject({ reviewId: started.reviewId });
+    expect(mocks.review).toHaveBeenCalledOnce();
   });
 
   it("joins the active persisted review instead of launching a duplicate provider", async () => {

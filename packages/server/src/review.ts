@@ -369,13 +369,9 @@ async function completeReview(
     if (!ownership) throw new Error(`Review ${reviewId} lost its worker lease before publication.`);
   };
   const assertSnapshotStillCurrent = (current: PrRow) => {
-    if (
-      args.snapshot &&
-      (current.head_sha !== args.snapshot.pr.head_sha ||
-        current.base_sha !== args.snapshot.pr.base_sha)
-    ) {
+    if (args.snapshot && current.head_sha !== args.snapshot.pr.head_sha) {
       throw new Error(
-        `PR changed before review execution: expected ${args.snapshot.pr.head_sha}/${args.snapshot.pr.base_sha}, current ${current.head_sha}/${current.base_sha}. Start a new review for the current head.`,
+        `PR head changed before review execution: expected ${args.snapshot.pr.head_sha}, current ${current.head_sha}. Start a new review for the current head.`,
       );
     }
   };
