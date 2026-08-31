@@ -29,6 +29,7 @@ import {
   DURABLE_WAIT_TIMEOUT_MS,
   THREAD_ACTION_EXECUTION_TIMEOUT_MS,
 } from "./timing.js";
+import type { ReviewExecutionSnapshot } from "./workQueue.js";
 
 function now(): string {
   return new Date().toISOString();
@@ -103,6 +104,8 @@ export interface RunReviewArgs {
   pr: PrRow;
   providerId: string;
   onProgress?: ProviderProgress;
+  onPhase?: (phase: string) => void;
+  snapshot?: ReviewExecutionSnapshot;
   /** Runs only for the caller that wins the cross-process review claim. */
   beforeCreate?: () => void;
 }
@@ -273,7 +276,9 @@ function cleanupWorktreeInBackground(wt: PrWorktree): void {
 
 export function startReview(args: RunReviewArgs): StartedReview {
   const { repo, pr, providerId, onProgress, beforeCreate } = args;
-  const provider = getProvider(providerId);
+  const executionPr = args.snapshot?.pr ?? pr;
+  const executionProviderId = args.snapshot?.providerId ?? providerId;
+  const provider = getProvider(executionProviderId);
   const db = getDb();
 
   // A SQLite write transaction is the cross-process lock. Every UI and MCP
@@ -281,8 +286,8 @@ export function startReview(args: RunReviewArgs): StartedReview {
   // provider; all concurrent callers join the same durable review.
   const claim = claimReview(db, {
     prId: pr.id,
-    headSha: pr.head_sha,
-    providerId,
+    headSha: executionPr.head_sha,
+    providerId: executionProviderId,
     startedAt: now(),
     workerToken: randomUUID(),
     workerPid: process.pid,
@@ -308,7 +313,7 @@ export function startReview(args: RunReviewArgs): StartedReview {
   return {
     ...claim,
     completion: completeReview(
-      { repo, pr, providerId, onProgress },
+      { ...args, repo, pr: executionPr, providerId: executionProviderId, onProgress },
       claim.reviewId,
       claim.workerToken!,
       provider,
@@ -343,7 +348,7 @@ async function completeReview(
 
   const reviewFinish = db.prepare(`
     UPDATE reviews
-    SET status = ?, summary = ?, finished_at = ?, error = ?,
+    SET status = ?, summary = ?, result = ?, finished_at = ?, error = ?,
         added_threads = ?, stale_marked = ?
     WHERE id = ? AND worker_token = ? AND status = 'running'
   `);
@@ -363,17 +368,37 @@ async function completeReview(
       .get(reviewId, workerToken);
     if (!ownership) throw new Error(`Review ${reviewId} lost its worker lease before publication.`);
   };
+  const assertSnapshotStillCurrent = (current: PrRow) => {
+    if (
+      args.snapshot &&
+      (current.head_sha !== args.snapshot.pr.head_sha ||
+        current.base_sha !== args.snapshot.pr.base_sha)
+    ) {
+      throw new Error(
+        `PR changed before review execution: expected ${args.snapshot.pr.head_sha}/${args.snapshot.pr.base_sha}, current ${current.head_sha}/${current.base_sha}. Start a new review for the current head.`,
+      );
+    }
+  };
 
   try {
+    args.onPhase?.("refreshing_pr");
     const refreshed = await hydratePR(repo, pr.number, executionController.signal);
     assertLease();
-    db.prepare("UPDATE reviews SET head_sha = ? WHERE id = ?").run(refreshed.head_sha, reviewId);
+    assertSnapshotStillCurrent(refreshed);
+    const reviewPr = args.snapshot?.pr ?? refreshed;
+    db.prepare("UPDATE reviews SET head_sha = ? WHERE id = ?").run(reviewPr.head_sha, reviewId);
+    args.onPhase?.("fetching_diff");
     const diff = await gh.getPRDiff(repo.owner, repo.name, pr.number, executionController.signal);
     assertLease();
+    if (args.snapshot) {
+      const confirmed = await hydratePR(repo, pr.number, executionController.signal);
+      assertLease();
+      assertSnapshotStillCurrent(confirmed);
+    }
 
-    const skills = getSkills(repo.id);
-    const prConfig = getPrReviewConfig(refreshed.id);
-    const globalConfig = getGlobalReviewConfig();
+    const skills = args.snapshot?.skills ?? getSkills(repo.id);
+    const prConfig = args.snapshot ? undefined : getPrReviewConfig(refreshed.id);
+    const globalConfig = args.snapshot ? undefined : getGlobalReviewConfig();
 
     const existingOpen = db
       .prepare(
@@ -386,9 +411,10 @@ async function completeReview(
       )
       .all(refreshed.id) as (ThreadRow & { first_body: string | null })[];
 
+    args.onPhase?.("preparing_worktree");
     const wt = await preparePrHeadWorktree({
       repo,
-      pr: refreshed,
+      pr: reviewPr,
       onProgress,
       signal: executionController.signal,
     });
@@ -396,30 +422,37 @@ async function completeReview(
       assertLease();
       const ctx: ReviewContext = {
         cwd: wt.cwd,
-        prTitle: refreshed.title,
-        prBody: refreshed.body,
-        prNumber: refreshed.number,
+        prTitle: reviewPr.title,
+        prBody: reviewPr.body,
+        prNumber: reviewPr.number,
         repoSlug: `${repo.owner}/${repo.name}`,
-        headSha: refreshed.head_sha,
-        baseSha: refreshed.base_sha,
+        headSha: reviewPr.head_sha,
+        baseSha: reviewPr.base_sha,
         diff,
         skills,
-        config: {
-          categories: prConfig.categories,
-          strictness: prConfig.strictness,
-          globalRules: globalConfig.customRules,
+        config: args.snapshot?.config ?? {
+          categories: prConfig!.categories,
+          strictness: prConfig!.strictness,
+          globalRules: globalConfig!.customRules,
           repoRules: skills,
-          perPrRules: prConfig.customRules,
-          pathInclude: prConfig.pathInclude,
-          pathExclude: prConfig.pathExclude,
+          perPrRules: prConfig!.customRules,
+          pathInclude: prConfig!.pathInclude,
+          pathExclude: prConfig!.pathExclude,
         },
-        existingOpenThreads: existingOpen.map((t) => ({
-          path: t.file_path,
-          line: t.line,
-          summary: (t.first_body ?? "").slice(0, 200),
-        })),
+        existingOpenThreads:
+          args.snapshot?.openThreads.map((thread) => ({
+            path: thread.path,
+            line: thread.line,
+            summary: thread.summary,
+          })) ??
+          existingOpen.map((t) => ({
+            path: t.file_path,
+            line: t.line,
+            summary: (t.first_body ?? "").slice(0, 200),
+          })),
       };
 
+      args.onPhase?.("running_provider");
       let result: ReviewResult | undefined;
       let attemptContext = ctx;
       for (let attempt = 1; attempt <= MAX_PROVIDER_OUTPUT_ATTEMPTS; attempt++) {
@@ -443,7 +476,7 @@ async function completeReview(
       }
       if (!result) throw new Error("AI reviewer produced no validated result.");
       assertLease();
-      recordSessions(refreshed.id, providerId, result.sessionIds, wt.cwd);
+      recordSessions(reviewPr.id, providerId, result.sessionIds, wt.cwd);
 
       // Dedupe + insert
       const existingFps = new Set(
@@ -463,6 +496,7 @@ async function completeReview(
 
       const tx = db.transaction(() => {
         assertLease();
+        args.onPhase?.("publishing_threads");
         // Staleness is review output too. Publish it in the terminal
         // transaction so a failed, cancelled, or fenced review changes no
         // user-visible thread state.
@@ -470,24 +504,24 @@ async function completeReview(
           "UPDATE threads SET stale = 1 WHERE id = ? AND last_seen_sha != ?",
         );
         for (const thread of existingOpen) {
-          staleMarked += markStale.run(thread.id, refreshed.head_sha).changes;
+          staleMarked += markStale.run(thread.id, reviewPr.head_sha).changes;
         }
         for (const c of result.comments) {
           const fp = fingerprint(c.path, c.line, c.body);
           if (existingFps.has(fp)) continue;
           const tid = Number(
             insertThread.run(
-              refreshed.id,
+              reviewPr.id,
               c.path,
               c.line,
               c.side,
               c.severity,
-              refreshed.head_sha,
-              refreshed.head_sha,
+              reviewPr.head_sha,
+              reviewPr.head_sha,
               now(),
             ).lastInsertRowid,
           );
-          insertComment.run(tid, c.body, refreshed.head_sha, now());
+          insertComment.run(tid, c.body, reviewPr.head_sha, now());
           added++;
         }
         // Publish the terminal state in the same commit as its threads. A
@@ -496,6 +530,7 @@ async function completeReview(
         const published = reviewFinish.run(
           "done",
           result.summary,
+          JSON.stringify({ summary: result.summary, comments: result.comments }),
           now(),
           null,
           added,
@@ -513,7 +548,17 @@ async function completeReview(
       cleanupWorktreeInBackground(wt);
     }
   } catch (e) {
-    reviewFinish.run("error", null, now(), (e as Error).message, null, null, reviewId, workerToken);
+    reviewFinish.run(
+      "error",
+      null,
+      null,
+      now(),
+      (e as Error).message,
+      null,
+      null,
+      reviewId,
+      workerToken,
+    );
     throw e;
   } finally {
     localReviewExecutions.delete(executionController);
@@ -763,6 +808,7 @@ export interface ReplyArgs {
   providerId: string;
   onProgress?: ProviderProgress;
   signal?: AbortSignal;
+  expectedHeadSha?: string;
 }
 
 async function prepareReply(
@@ -781,6 +827,11 @@ async function prepareReply(
     .all(threadId) as CommentRow[];
 
   const refreshed = await hydratePR(repo, pr.number, signal);
+  if (args.expectedHeadSha && refreshed.head_sha !== args.expectedHeadSha) {
+    throw new Error(
+      `PR head changed before reply execution: expected ${args.expectedHeadSha}, current ${refreshed.head_sha}. Start a new reply operation for the current head.`,
+    );
+  }
 
   const wt = await preparePrHeadWorktree({ repo, pr: refreshed, onProgress, signal });
   try {
@@ -823,6 +874,7 @@ export interface RevalidateArgs {
   providerId: string;
   onProgress?: ProviderProgress;
   signal?: AbortSignal;
+  expectedHeadSha?: string;
 }
 
 async function prepareRevalidate(
@@ -833,6 +885,11 @@ async function prepareRevalidate(
   const db = getDb();
 
   const refreshed = await hydratePR(repo, pr.number, signal);
+  if (args.expectedHeadSha && refreshed.head_sha !== args.expectedHeadSha) {
+    throw new Error(
+      `PR head changed before revalidation execution: expected ${args.expectedHeadSha}, current ${refreshed.head_sha}. Start a new revalidation operation for the current head.`,
+    );
+  }
 
   const thread = db
     .prepare("SELECT * FROM threads WHERE id = ? AND pr_id = ?")

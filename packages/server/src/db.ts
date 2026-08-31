@@ -68,7 +68,8 @@ export function migrateDatabase(db: Database.Database): void {
       worker_token TEXT,
       worker_pid INTEGER,
       added_threads INTEGER,
-      stale_marked INTEGER
+      stale_marked INTEGER,
+      result TEXT
     );
 
     CREATE TABLE IF NOT EXISTS threads (
@@ -131,7 +132,16 @@ export function migrateDatabase(db: Database.Database): void {
       worker_pid INTEGER,
       attempt_count INTEGER NOT NULL DEFAULT 0,
       launch_count INTEGER NOT NULL DEFAULT 0,
-      last_launch_at TEXT
+      last_launch_at TEXT,
+      target_id INTEGER,
+      head_sha TEXT,
+      base_sha TEXT,
+      provider TEXT,
+      config_fingerprint TEXT,
+      idempotency_key TEXT,
+      phase TEXT NOT NULL DEFAULT 'queued',
+      related_id INTEGER,
+      expires_at TEXT
     );
 
     CREATE TABLE IF NOT EXISTS work_events (
@@ -255,6 +265,9 @@ export function migrateDatabase(db: Database.Database): void {
     if (!reviewColumns.some((column) => column.name === "stale_marked")) {
       db.exec("ALTER TABLE reviews ADD COLUMN stale_marked INTEGER");
     }
+    if (!reviewColumns.some((column) => column.name === "result")) {
+      db.exec("ALTER TABLE reviews ADD COLUMN result TEXT");
+    }
 
     const workColumns = db.pragma("table_info(work_items)") as { name: string }[];
     if (!workColumns.some((column) => column.name === "launch_count")) {
@@ -263,6 +276,29 @@ export function migrateDatabase(db: Database.Database): void {
     if (!workColumns.some((column) => column.name === "last_launch_at")) {
       db.exec("ALTER TABLE work_items ADD COLUMN last_launch_at TEXT");
     }
+    const operationColumns = [
+      ["target_id", "INTEGER"],
+      ["head_sha", "TEXT"],
+      ["base_sha", "TEXT"],
+      ["provider", "TEXT"],
+      ["config_fingerprint", "TEXT"],
+      ["idempotency_key", "TEXT"],
+      ["phase", "TEXT NOT NULL DEFAULT 'queued'"],
+      ["related_id", "INTEGER"],
+      ["expires_at", "TEXT"],
+    ] as const;
+    for (const [column, definition] of operationColumns) {
+      if (!workColumns.some((candidate) => candidate.name === column)) {
+        db.exec(`ALTER TABLE work_items ADD COLUMN ${column} ${definition}`);
+      }
+    }
+    db.exec(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_work_items_idempotency
+        ON work_items(idempotency_key)
+        WHERE idempotency_key IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS idx_work_items_target
+        ON work_items(kind, target_id, created_at);
+    `);
 
     const repoColumns = db.pragma("table_info(repos)") as { name: string }[];
     if (!repoColumns.some((column) => column.name === "reviewer_provider")) {
@@ -329,6 +365,7 @@ export interface ReviewRow {
   worker_pid: number | null;
   added_threads: number | null;
   stale_marked: number | null;
+  result?: string | null;
 }
 export interface ThreadRow {
   id: number;
@@ -385,6 +422,15 @@ export interface WorkItemRow {
   attempt_count: number;
   launch_count: number;
   last_launch_at: string | null;
+  target_id?: number | null;
+  head_sha?: string | null;
+  base_sha?: string | null;
+  provider?: string | null;
+  config_fingerprint?: string | null;
+  idempotency_key?: string | null;
+  phase?: string;
+  related_id?: number | null;
+  expires_at?: string | null;
 }
 export interface AiSessionRow {
   id: number;

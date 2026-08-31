@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => ({
   revalidate: vi.fn(),
   cleanup: vi.fn(),
   recordSessions: vi.fn(),
+  hydrate: vi.fn(),
 }));
 
 vi.mock("./db.js", async (importOriginal) => {
@@ -48,7 +49,7 @@ vi.mock("./reviewConfig.js", () => ({
   getGlobalReviewConfig: () => ({ customRules: "" }),
 }));
 vi.mock("./github.js", () => ({ getPRDiff: vi.fn().mockResolvedValue("diff") }));
-vi.mock("./prs.js", () => ({ hydratePR: () => Promise.resolve(mocks.pr) }));
+vi.mock("./prs.js", () => ({ hydratePR: (...args: unknown[]) => mocks.hydrate(...args) }));
 vi.mock("./sessions.js", () => ({ recordSessions: mocks.recordSessions }));
 vi.mock("./prWorktree.js", () => ({
   preparePrHeadWorktree: () => Promise.resolve({ cwd: "/tmp/review-wt", cleanup: mocks.cleanup }),
@@ -95,6 +96,8 @@ beforeEach(() => {
   mocks.revalidate.mockReset();
   mocks.cleanup.mockReset();
   mocks.recordSessions.mockReset();
+  mocks.hydrate.mockReset();
+  mocks.hydrate.mockResolvedValue(mocks.pr);
   mocks.cleanup.mockResolvedValue(undefined);
   mocks.review.mockResolvedValue({
     summary: "Looks good",
@@ -223,6 +226,41 @@ describe("startReview", () => {
         'AI reviewer output was invalid after 2 attempts. second invalid response Output excerpt: "bad two".',
     });
     expect(mocks.db.prepare("SELECT COUNT(*) AS count FROM threads").get()).toEqual({ count: 0 });
+  });
+
+  it("fails closed if the base or head moves while the exact diff is being fetched", async () => {
+    mocks.hydrate
+      .mockResolvedValueOnce(mocks.pr)
+      .mockResolvedValueOnce({ ...mocks.pr, base_sha: "moved-base" });
+    const snapshot = {
+      pr: mocks.pr,
+      providerId: "test",
+      skills: "",
+      config: {
+        categories: [],
+        strictness: "balanced",
+        globalRules: "",
+        repoRules: "",
+        perPrRules: "",
+        pathInclude: "",
+        pathExclude: "",
+      },
+      openThreads: [],
+      configFingerprint: "fingerprint",
+    };
+
+    const started = startReview({
+      repo,
+      pr: mocks.pr,
+      providerId: "test",
+      snapshot,
+    });
+
+    await expect(started.completion).rejects.toThrow("PR changed before review execution");
+    expect(mocks.review).not.toHaveBeenCalled();
+    expect(
+      mocks.db.prepare("SELECT status FROM reviews WHERE id = ?").get(started.reviewId),
+    ).toEqual({ status: "error" });
   });
 
   it("joins the active persisted review instead of launching a duplicate provider", async () => {
@@ -438,6 +476,34 @@ describe("startReview", () => {
 });
 
 describe("durable thread actions", () => {
+  it("fails closed when a queued thread action's exact head has moved", async () => {
+    const replyThreadId = createThread();
+    mocks.hydrate.mockResolvedValue({ ...mocks.pr, head_sha: "moved-head" });
+    const reply = startReply({
+      repo,
+      pr: mocks.pr,
+      threadId: replyThreadId,
+      userMessage: "Check this exact head.",
+      providerId: "test",
+      expectedHeadSha: mocks.pr.head_sha,
+    });
+    await expect(reply.completion).rejects.toThrow("PR head changed before reply execution");
+    expect(mocks.reply).not.toHaveBeenCalled();
+
+    const revalidateThreadId = createThread();
+    const revalidation = startRevalidate({
+      repo,
+      pr: mocks.pr,
+      threadId: revalidateThreadId,
+      providerId: "test",
+      expectedHeadSha: mocks.pr.head_sha,
+    });
+    await expect(revalidation.completion).rejects.toThrow(
+      "PR head changed before revalidation execution",
+    );
+    expect(mocks.revalidate).not.toHaveBeenCalled();
+  });
+
   it("joins duplicate replies and atomically publishes comments with completion", async () => {
     const threadId = createThread();
     let releaseReply!: (value: { body: string; rawOutput: string; sessionIds: string[] }) => void;

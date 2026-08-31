@@ -3,8 +3,9 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
-import { getDb, type WorkItemRow } from "./db.js";
+import { getDb, type PrRow, type WorkItemRow } from "./db.js";
 import { DURABLE_WAIT_TIMEOUT_MS } from "./timing.js";
+import type { ReviewInstructionConfig } from "./providers/types.js";
 
 const configuredHeartbeatMs = Number(process.env.REVIEWER_HEARTBEAT_MS);
 const HEARTBEAT_MS =
@@ -21,15 +22,38 @@ const MAX_LAUNCH_ATTEMPTS = 3;
 const LAUNCH_RETRY_AFTER_MS = 5_000;
 const POLL_INTERVAL_MS = 250;
 const FINISHED_EVENT_RETENTION_MS = 24 * 60 * 60 * 1_000;
+const FINISHED_WORK_RETENTION_MS = 24 * 60 * 60 * 1_000;
+
+export interface ReviewThreadSnapshot {
+  id: number;
+  path: string | null;
+  line: number | null;
+  summary: string;
+  lastSeenSha: string;
+}
+
+export interface ReviewExecutionSnapshot {
+  pr: PrRow;
+  providerId: string;
+  skills: string;
+  config: ReviewInstructionConfig;
+  openThreads: ReviewThreadSnapshot[];
+  configFingerprint: string;
+}
 
 export type WorkPayload =
-  | { kind: "review"; prId: number }
-  | { kind: "reply"; threadId: number; message: string }
-  | { kind: "revalidate"; threadId: number };
+  | { kind: "review"; prId: number; snapshot?: ReviewExecutionSnapshot }
+  | { kind: "reply"; threadId: number; message: string; headSha?: string; providerId?: string }
+  | { kind: "revalidate"; threadId: number; headSha?: string; providerId?: string };
 
 export interface EnqueuedWork {
   workId: string;
   created: boolean;
+}
+
+export interface EnqueueWorkOptions {
+  beforeCreate?: () => void;
+  idempotencyKey?: string;
 }
 
 export interface WorkEvent {
@@ -54,15 +78,29 @@ function dedupeKey(payload: WorkPayload): string {
 }
 
 export function getWorkItem(workId: string): WorkItemRow | undefined {
+  pruneExpiredWorkItems();
   return getDb().prepare("SELECT * FROM work_items WHERE id = ?").get(workId) as
     | WorkItemRow
     | undefined;
 }
 
 export function listWorkItems(): WorkItemRow[] {
+  pruneExpiredWorkItems();
   return getDb()
     .prepare("SELECT * FROM work_items ORDER BY created_at DESC")
     .all() as WorkItemRow[];
+}
+
+export function findLatestWorkItem(
+  kind: WorkPayload["kind"],
+  targetId: number,
+): WorkItemRow | undefined {
+  pruneExpiredWorkItems();
+  return getDb()
+    .prepare(
+      "SELECT * FROM work_items WHERE kind = ? AND target_id = ? ORDER BY created_at DESC LIMIT 1",
+    )
+    .get(kind, targetId) as WorkItemRow | undefined;
 }
 
 export function reconcileInterruptedWorkItems(): number {
@@ -114,16 +152,61 @@ export function pruneFinishedWorkEvents(retentionMs = FINISHED_EVENT_RETENTION_M
     .run(cutoff).changes;
 }
 
-export function enqueueWork(
-  payload: WorkPayload,
-  options: { beforeCreate?: () => void } = {},
-): EnqueuedWork {
+export function pruneExpiredWorkItems(): number {
+  return getDb()
+    .prepare(
+      `DELETE FROM work_items
+       WHERE status IN ('done', 'error', 'cancelled')
+         AND expires_at IS NOT NULL AND expires_at < ?`,
+    )
+    .run(now()).changes;
+}
+
+function operationMetadata(payload: WorkPayload): {
+  targetId: number;
+  headSha: string | null;
+  baseSha: string | null;
+  provider: string | null;
+  configFingerprint: string | null;
+} {
+  if (payload.kind === "review") {
+    return {
+      targetId: payload.prId,
+      headSha: payload.snapshot?.pr.head_sha ?? null,
+      baseSha: payload.snapshot?.pr.base_sha ?? null,
+      provider: payload.snapshot?.providerId ?? null,
+      configFingerprint: payload.snapshot?.configFingerprint ?? null,
+    };
+  }
+  return {
+    targetId: payload.threadId,
+    headSha: payload.headSha ?? null,
+    baseSha: null,
+    provider: payload.providerId ?? null,
+    configFingerprint: null,
+  };
+}
+
+export function enqueueWork(payload: WorkPayload, options: EnqueueWorkOptions = {}): EnqueuedWork {
   const db = getDb();
   const key = dedupeKey(payload);
   const result = db
     .transaction(() => {
       pruneFinishedWorkEvents();
+      pruneExpiredWorkItems();
       reconcileInterruptedWorkItems();
+      const serializedPayload = JSON.stringify(payload);
+      if (options.idempotencyKey) {
+        const existing = db
+          .prepare("SELECT id, payload FROM work_items WHERE idempotency_key = ?")
+          .get(options.idempotencyKey) as { id: string; payload: string } | undefined;
+        if (existing) {
+          if (existing.payload !== serializedPayload) {
+            throw new Error("Reviewer idempotency key was already used for different input.");
+          }
+          return { workId: existing.id, created: false };
+        }
+      }
       const active = db
         .prepare(
           `SELECT id, payload FROM work_items
@@ -132,7 +215,7 @@ export function enqueueWork(
         )
         .get(key) as { id: string; payload: string } | undefined;
       if (active) {
-        if (active.payload === JSON.stringify(payload)) {
+        if (active.payload === serializedPayload) {
           return { workId: active.id, created: false };
         }
         throw new Error(
@@ -141,21 +224,43 @@ export function enqueueWork(
       }
       options.beforeCreate?.();
       const workId = randomUUID();
+      const metadata = operationMetadata(payload);
       db.prepare(
-        `INSERT INTO work_items (id, kind, dedupe_key, payload, status, created_at)
-         VALUES (?, ?, ?, ?, 'queued', ?)`,
-      ).run(workId, payload.kind, key, JSON.stringify(payload), now());
+        `INSERT INTO work_items
+           (id, kind, dedupe_key, payload, status, created_at, target_id, head_sha,
+            base_sha, provider, config_fingerprint, idempotency_key, phase)
+         VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, 'queued')`,
+      ).run(
+        workId,
+        payload.kind,
+        key,
+        serializedPayload,
+        now(),
+        metadata.targetId,
+        metadata.headSha,
+        metadata.baseSha,
+        metadata.provider,
+        metadata.configFingerprint,
+        options.idempotencyKey ?? null,
+      );
       return { workId, created: true };
     })
     .immediate();
   ensureWorkItemRunning(result.workId);
+  if (result.created) launchQueueSupervisor();
   return result;
 }
 
-export function enqueueReplyWork(threadId: number, message: string, headSha: string): EnqueuedWork {
+export function enqueueReplyWork(
+  threadId: number,
+  message: string,
+  headSha: string,
+  options: { providerId?: string; idempotencyKey?: string } = {},
+): EnqueuedWork {
   return enqueueWork(
-    { kind: "reply", threadId, message },
+    { kind: "reply", threadId, message, headSha, providerId: options.providerId },
     {
+      idempotencyKey: options.idempotencyKey,
       beforeCreate: () => {
         getDb()
           .prepare(
@@ -168,8 +273,16 @@ export function enqueueReplyWork(threadId: number, message: string, headSha: str
   );
 }
 
+export function setWorkPhase(workId: string, phase: string): void {
+  getDb()
+    .prepare("UPDATE work_items SET phase = ? WHERE id = ? AND status IN ('queued', 'running')")
+    .run(phase, workId);
+}
+
 const compiledWorkerEntrypoint = fileURLToPath(new URL("./worker.js", import.meta.url));
 const sourceWorkerEntrypoint = fileURLToPath(new URL("./worker.ts", import.meta.url));
+const compiledSupervisorEntrypoint = fileURLToPath(new URL("./supervisor.js", import.meta.url));
+const sourceSupervisorEntrypoint = fileURLToPath(new URL("./supervisor.ts", import.meta.url));
 const requireFromHere = createRequire(import.meta.url);
 
 export function resolveWorkerLaunch(
@@ -196,6 +309,57 @@ export function resolveWorkerLaunch(
   throw new Error(
     "Reviewer worker entrypoint is missing. Run npm run build before starting Reviewer.",
   );
+}
+
+export function resolveSupervisorLaunch(fileExists: (path: string) => boolean = existsSync): {
+  command: string;
+  args: string[];
+} {
+  if (fileExists(compiledSupervisorEntrypoint)) {
+    return { command: process.execPath, args: [compiledSupervisorEntrypoint] };
+  }
+  if (fileExists(sourceSupervisorEntrypoint)) {
+    let tsxCli: string;
+    try {
+      tsxCli = requireFromHere.resolve("tsx/cli");
+    } catch {
+      throw new Error("Reviewer source supervisor requires installed dependencies.");
+    }
+    return { command: process.execPath, args: [tsxCli, sourceSupervisorEntrypoint] };
+  }
+  throw new Error(
+    "Reviewer supervisor entrypoint is missing. Run npm run build before starting Reviewer.",
+  );
+}
+
+export function launchQueueSupervisor(): void {
+  let launch: ReturnType<typeof resolveSupervisorLaunch>;
+  try {
+    launch = resolveSupervisorLaunch();
+  } catch {
+    return;
+  }
+  const child = spawn(launch.command, launch.args, {
+    detached: process.platform !== "win32",
+    stdio: "ignore",
+  });
+  child.once("error", () => {
+    // The operation's directly launched worker remains authoritative. A later
+    // operation or status read will start another recovery supervisor.
+  });
+  child.unref();
+}
+
+export async function superviseWorkQueue(): Promise<void> {
+  for (;;) {
+    reconcileInterruptedWorkItems();
+    const active = listWorkItems().filter(
+      (work) => work.status === "queued" || work.status === "running",
+    );
+    if (active.length === 0) return;
+    for (const work of active) ensureWorkItemRunning(work.id);
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+  }
 }
 
 export function ensureWorkItemRunning(workId: string): WorkItemRow {
@@ -288,7 +452,7 @@ export function claimWorkItem(workId: string): ClaimedWork | undefined {
   const claimed = db
     .prepare(
       `UPDATE work_items
-       SET status = 'running', started_at = ?, heartbeat_at = ?,
+       SET status = 'running', phase = 'starting', started_at = ?, heartbeat_at = ?,
            worker_token = ?, worker_pid = ?, attempt_count = attempt_count + 1,
            error = NULL
        WHERE id = ? AND status = 'queued'`,
@@ -315,24 +479,53 @@ export function startWorkHeartbeat(workId: string, workerToken: string): () => v
 }
 
 export function completeWorkItem(workId: string, workerToken: string, result: unknown): void {
+  const relatedId =
+    typeof result === "object" && result !== null
+      ? Number(
+          "reviewId" in result
+            ? result.reviewId
+            : "actionId" in result
+              ? result.actionId
+              : Number.NaN,
+        )
+      : Number.NaN;
+  const expiresAt = new Date(new Date().getTime() + FINISHED_WORK_RETENTION_MS).toISOString();
   const updated = getDb()
     .prepare(
       `UPDATE work_items
-       SET status = 'done', result = ?, error = NULL, finished_at = ?, heartbeat_at = ?
+       SET status = 'done', phase = 'completed', result = ?, error = NULL,
+           related_id = ?, finished_at = ?, heartbeat_at = ?, expires_at = ?
        WHERE id = ? AND worker_token = ? AND status = 'running'`,
     )
-    .run(JSON.stringify(result), now(), now(), workId, workerToken);
+    .run(
+      JSON.stringify(result),
+      Number.isFinite(relatedId) ? relatedId : null,
+      now(),
+      now(),
+      expiresAt,
+      workId,
+      workerToken,
+    );
   if (updated.changes !== 1) throw new Error(`Work item ${workId} lost its worker lease.`);
 }
 
 export function failWorkItem(workId: string, workerToken: string, error: unknown): void {
+  const expiresAt = new Date(new Date().getTime() + FINISHED_WORK_RETENTION_MS).toISOString();
   getDb()
     .prepare(
       `UPDATE work_items
-       SET status = 'error', error = ?, finished_at = ?, heartbeat_at = ?
+       SET status = 'error', phase = 'failed', error = ?, finished_at = ?, heartbeat_at = ?,
+           expires_at = ?
        WHERE id = ? AND worker_token = ? AND status = 'running'`,
     )
-    .run(error instanceof Error ? error.message : String(error), now(), now(), workId, workerToken);
+    .run(
+      error instanceof Error ? error.message : String(error),
+      now(),
+      now(),
+      expiresAt,
+      workId,
+      workerToken,
+    );
 }
 
 export async function waitForWorkItem(
@@ -343,6 +536,8 @@ export async function waitForWorkItem(
     timeoutMs?: number | null;
     onEvent?: (event: WorkEvent) => void;
     onProgress?: (work: WorkItemRow) => void;
+    /** Return the latest non-terminal row when the bounded wait expires. */
+    returnOnTimeout?: boolean;
   } = {},
 ): Promise<WorkItemRow> {
   const started = Date.now();
@@ -360,6 +555,7 @@ export async function waitForWorkItem(
       throw new Error(work.error ?? `Reviewer work item ${workId} failed.`);
     }
     if (timeoutMs !== null && Date.now() - started >= timeoutMs) {
+      if (options.returnOnTimeout) return work;
       throw new Error(`Timed out waiting for Reviewer work item ${workId}.`);
     }
     await new Promise<void>((resolve, reject) => {

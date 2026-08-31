@@ -60,13 +60,13 @@ describe("durable Reviewer work queue", () => {
 
     expect(first.created).toBe(true);
     expect(second).toEqual({ workId: first.workId, created: false });
-    expect(mocks.spawn).toHaveBeenCalledTimes(1);
+    expect(mocks.spawn).toHaveBeenCalledTimes(2);
     expect(mocks.spawn).toHaveBeenCalledWith(
       process.execPath,
       expect.arrayContaining([first.workId]),
       expect.objectContaining({ detached: true, stdio: "ignore" }),
     );
-    expect(mocks.unref).toHaveBeenCalledTimes(1);
+    expect(mocks.unref).toHaveBeenCalledTimes(2);
     expect(getWorkItem(first.workId)).toMatchObject({
       status: "queued",
       attempt_count: 0,
@@ -125,6 +125,32 @@ describe("durable Reviewer work queue", () => {
     dateNow.mockRestore();
   });
 
+  it("returns a healthy running row when a bounded wait expires", async () => {
+    const queued = enqueueWork({ kind: "review", prId: 20 });
+    claimWorkItem(queued.workId);
+
+    await expect(
+      waitForWorkItem(queued.workId, { timeoutMs: 10, returnOnTimeout: true }),
+    ).resolves.toMatchObject({ status: "running" });
+  });
+
+  it("deduplicates completed mutations by durable idempotency key", () => {
+    const first = enqueueWork(
+      { kind: "revalidate", threadId: 12, headSha: "head" },
+      { idempotencyKey: "revalidate-12-head" },
+    );
+    const claim = claimWorkItem(first.workId)!;
+    completeWorkItem(first.workId, claim.workerToken, { actionId: 3, resolved: true });
+
+    const retry = enqueueWork(
+      { kind: "revalidate", threadId: 12, headSha: "head" },
+      { idempotencyKey: "revalidate-12-head" },
+    );
+
+    expect(retry).toEqual({ workId: first.workId, created: false });
+    expect(mocks.spawn).toHaveBeenCalledTimes(2);
+  });
+
   it("allows only one process to claim and publish a queued item", () => {
     const queued = enqueueWork({ kind: "revalidate", threadId: 7 });
     const first = claimWorkItem(queued.workId);
@@ -147,7 +173,7 @@ describe("durable Reviewer work queue", () => {
     );
   });
 
-  it("persists a reply exactly once in the enqueue transaction", () => {
+  it("persists a reply exactly once across a completed idempotent retry", () => {
     mocks.db
       .prepare("INSERT INTO repos (id, owner, name, local_path) VALUES (1, 'test', 'repo', '/tmp')")
       .run();
@@ -167,8 +193,14 @@ describe("durable Reviewer work queue", () => {
          VALUES (7, 1, 'open', 'head-sha', 'head-sha', '2026-01-01T00:00:00.000Z')`,
       )
       .run();
-    const first = enqueueReplyWork(7, "please explain", "head-sha");
-    const second = enqueueReplyWork(7, "please explain", "head-sha");
+    const first = enqueueReplyWork(7, "please explain", "head-sha", {
+      idempotencyKey: "reply-7-head-message",
+    });
+    const claim = claimWorkItem(first.workId)!;
+    completeWorkItem(first.workId, claim.workerToken, { actionId: 9 });
+    const second = enqueueReplyWork(7, "please explain", "head-sha", {
+      idempotencyKey: "reply-7-head-message",
+    });
     const comments = mocks.db
       .prepare("SELECT author, body, head_sha FROM comments WHERE thread_id = ?")
       .all(7);
@@ -214,7 +246,7 @@ describe("durable Reviewer work queue", () => {
         launch_count: 3,
         error: "Reviewer worker could not be launched after repeated launch failures.",
       });
-      expect(mocks.spawn).toHaveBeenCalledTimes(3);
+      expect(mocks.spawn).toHaveBeenCalledTimes(4);
     } finally {
       vi.useRealTimers();
     }

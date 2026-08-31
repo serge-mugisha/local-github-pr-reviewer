@@ -7,6 +7,7 @@ import {
   claimWorkItem,
   completeWorkItem,
   failWorkItem,
+  setWorkPhase,
   startWorkHeartbeat,
   type WorkPayload,
 } from "./workQueue.js";
@@ -24,23 +25,53 @@ async function execute(workId: string, payload: WorkPayload): Promise<unknown> {
     appendWorkEvent(workId, event);
   if (payload.kind === "review") {
     const context = requireContext(payload.prId);
-    return startReview({ ...context, onProgress }).completion;
+    if (payload.snapshot && context.pr.head_sha !== payload.snapshot.pr.head_sha) {
+      throw new Error(
+        `PR head changed after review enqueue: expected ${payload.snapshot.pr.head_sha}, current ${context.pr.head_sha}.`,
+      );
+    }
+    const started = startReview({
+      ...context,
+      pr: payload.snapshot?.pr ?? context.pr,
+      providerId: payload.snapshot?.providerId ?? context.providerId,
+      snapshot: payload.snapshot,
+      onProgress,
+      onPhase: (phase) => setWorkPhase(workId, phase),
+    });
+    return started.completion;
   }
   const thread = getDb().prepare("SELECT pr_id FROM threads WHERE id = ?").get(payload.threadId) as
     | { pr_id: number }
     | undefined;
   if (!thread) throw new Error(`Thread ${payload.threadId} not found.`);
   const context = requireContext(thread.pr_id);
+  if (payload.headSha && context.pr.head_sha !== payload.headSha) {
+    throw new Error(
+      `PR head changed after thread action enqueue: expected ${payload.headSha}, current ${context.pr.head_sha}.`,
+    );
+  }
+  const providerId = payload.providerId ?? context.providerId;
+  setWorkPhase(workId, "running_provider");
   if (payload.kind === "reply") {
-    return startReply({
+    const started = startReply({
       ...context,
+      providerId,
       threadId: payload.threadId,
       userMessage: payload.message,
       userMessageAlreadyPersisted: true,
+      expectedHeadSha: payload.headSha,
       onProgress,
-    }).completion;
+    });
+    return { ...(await started.completion), actionId: started.actionId };
   }
-  return startRevalidate({ ...context, threadId: payload.threadId, onProgress }).completion;
+  const started = startRevalidate({
+    ...context,
+    providerId,
+    threadId: payload.threadId,
+    expectedHeadSha: payload.headSha,
+    onProgress,
+  });
+  return { ...(await started.completion), actionId: started.actionId };
 }
 
 async function main(): Promise<void> {

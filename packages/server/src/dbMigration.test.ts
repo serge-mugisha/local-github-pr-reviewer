@@ -54,7 +54,13 @@ describe("PR schema migration", () => {
       expect(
         (migrated.pragma("table_info(reviews)") as { name: string }[]).map((column) => column.name),
       ).toEqual(
-        expect.arrayContaining(["worker_token", "worker_pid", "added_threads", "stale_marked"]),
+        expect.arrayContaining([
+          "worker_token",
+          "worker_pid",
+          "added_threads",
+          "stale_marked",
+          "result",
+        ]),
       );
       expect(
         (migrated.pragma("table_info(thread_actions)") as { name: string }[]).map(
@@ -85,6 +91,15 @@ describe("PR schema migration", () => {
           "attempt_count",
           "launch_count",
           "last_launch_at",
+          "target_id",
+          "head_sha",
+          "base_sha",
+          "provider",
+          "config_fingerprint",
+          "idempotency_key",
+          "phase",
+          "related_id",
+          "expires_at",
         ]),
       );
       expect(

@@ -48,6 +48,7 @@ import {
   setRepoReviewerProvider,
 } from "./reviewerProvider.js";
 import { listViewedFiles, setFileViewed } from "./viewedFiles.js";
+import { createReviewExecutionSnapshot } from "./operations.js";
 
 function sseInit(reply: FastifyReply): void {
   reply.raw.writeHead(200, {
@@ -456,7 +457,8 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     sseSend(reply, "log", { message: `starting review with ${providerId}…` });
 
     try {
-      const queued = enqueueWork({ kind: "review", prId });
+      const snapshot = await createReviewExecutionSnapshot(repo, pr);
+      const queued = enqueueWork({ kind: "review", prId, snapshot });
       sseSend(reply, "log", {
         message: `${queued.created ? "queued" : "joined"} durable review task ${queued.workId}`,
       });
@@ -490,7 +492,8 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     sseSend(reply, "log", { message: `replying with ${providerId}…` });
     let inputPersisted = false;
     try {
-      const queued = enqueueReplyWork(threadId, body.body, pr.head_sha);
+      const refreshed = await hydratePR(repo, pr.number);
+      const queued = enqueueReplyWork(threadId, body.body, refreshed.head_sha, { providerId });
       // The enqueue transaction persists the user's input before execution.
       inputPersisted = true;
       sseSend(reply, "log", {
@@ -523,7 +526,13 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     sseInit(reply);
     sseSend(reply, "log", { message: `revalidating with ${providerId}…` });
     try {
-      const queued = enqueueWork({ kind: "revalidate", threadId });
+      const refreshed = await hydratePR(repo, pr.number);
+      const queued = enqueueWork({
+        kind: "revalidate",
+        threadId,
+        headSha: refreshed.head_sha,
+        providerId,
+      });
       sseSend(reply, "log", {
         message: `${queued.created ? "queued" : "joined"} durable revalidation task ${queued.workId}`,
       });
