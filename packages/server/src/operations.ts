@@ -7,7 +7,7 @@ import {
   type ThreadRow,
   type WorkItemRow,
 } from "./db.js";
-import { getGlobalReviewConfig, getPrReviewConfig } from "./reviewConfig.js";
+import { getGlobalReviewConfig, getPrReviewConfig, type ReviewConfig } from "./reviewConfig.js";
 import { getSkills } from "./skills.js";
 import { hydratePR, getPRById, listThreadsForPR } from "./prs.js";
 import { resolveReviewerProvider } from "./reviewerProvider.js";
@@ -88,6 +88,7 @@ export async function createReviewExecutionSnapshot(
   repo: RepoRow,
   pr: PrRow,
   expectedHeadSha?: string,
+  prConfigOverride?: Partial<ReviewConfig>,
 ): Promise<ReviewExecutionSnapshot> {
   const refreshed = await hydratePR(repo, pr.number);
   if (expectedHeadSha && refreshed.head_sha !== expectedHeadSha) {
@@ -96,7 +97,7 @@ export async function createReviewExecutionSnapshot(
     );
   }
   const skills = getSkills(repo.id);
-  const prConfig = getPrReviewConfig(refreshed.id);
+  const prConfig = { ...getPrReviewConfig(refreshed.id), ...prConfigOverride };
   const globalConfig = getGlobalReviewConfig();
   const providerId = resolveReviewerProvider(repo, refreshed).provider;
   const config = {
@@ -173,7 +174,17 @@ function reviewResult(
 ): OperationSnapshot["review"] | undefined {
   if (payload.kind !== "review") return undefined;
   const currentPr = getPRById(payload.prId);
-  if (work.status !== "done" || !work.related_id) {
+  let relatedId = work.related_id ?? null;
+  if (!relatedId && work.result) {
+    try {
+      const legacyResult = JSON.parse(work.result) as { reviewId?: unknown };
+      const parsed = Number(legacyResult.reviewId);
+      if (Number.isInteger(parsed) && parsed > 0) relatedId = parsed;
+    } catch {
+      // A malformed historical payload is represented by the failed gate below.
+    }
+  }
+  if (work.status !== "done" || !relatedId) {
     return {
       reviewedHeadSha: work.head_sha ?? null,
       currentHeadSha: currentPr?.head_sha ?? null,
@@ -183,7 +194,7 @@ function reviewResult(
       openActionableThreads: [],
     };
   }
-  const review = getDb().prepare("SELECT * FROM reviews WHERE id = ?").get(work.related_id) as
+  const review = getDb().prepare("SELECT * FROM reviews WHERE id = ?").get(relatedId) as
     | { id: number; pr_id: number; head_sha: string; summary: string | null; result: string | null }
     | undefined;
   if (!review) {

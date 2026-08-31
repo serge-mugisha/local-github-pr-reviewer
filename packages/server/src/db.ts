@@ -293,11 +293,30 @@ export function migrateDatabase(db: Database.Database): void {
       }
     }
     db.exec(`
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_work_items_idempotency
+      DROP INDEX IF EXISTS idx_work_items_idempotency;
+      CREATE UNIQUE INDEX idx_work_items_idempotency
         ON work_items(idempotency_key)
-        WHERE idempotency_key IS NOT NULL;
+        WHERE idempotency_key IS NOT NULL
+          AND status IN ('queued', 'running', 'done');
       CREATE INDEX IF NOT EXISTS idx_work_items_target
         ON work_items(kind, target_id, created_at);
+
+      UPDATE work_items
+      SET target_id = CASE
+        WHEN kind = 'review' THEN json_extract(payload, '$.prId')
+        ELSE json_extract(payload, '$.threadId')
+      END
+      WHERE target_id IS NULL AND json_valid(payload);
+
+      UPDATE work_items
+      SET related_id = json_extract(result, '$.reviewId')
+      WHERE kind = 'review' AND status = 'done' AND related_id IS NULL
+        AND result IS NOT NULL AND json_valid(result);
+
+      UPDATE work_items
+      SET expires_at = strftime('%Y-%m-%dT%H:%M:%fZ', finished_at, '+1 day')
+      WHERE status IN ('done', 'error', 'cancelled')
+        AND expires_at IS NULL AND finished_at IS NOT NULL;
     `);
 
     const repoColumns = db.pragma("table_info(repos)") as { name: string }[];

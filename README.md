@@ -190,6 +190,9 @@ No extended MCP timeout is required. `trigger_review`, `reply_to_thread`, and
 `terminal` is false. `verify_review_gate` refreshes GitHub and confirms the completed review still
 matches the current PR head.
 
+Terminal failures release their semantic idempotency key. After correcting the reported cause,
+repeat the original tool call once to create a fresh operation; no `forceNew` escape hatch is needed.
+
 **For Antigravity** (`.gemini/config/config.json`):
 
 ```json

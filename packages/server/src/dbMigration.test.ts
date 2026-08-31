@@ -15,6 +15,33 @@ afterEach(() => {
 });
 
 describe("PR schema migration", () => {
+  it("backfills durable operation metadata from pre-0.6 payloads", () => {
+    db = new Database(":memory:");
+    migrateDatabase(db);
+    db.prepare(
+      `INSERT INTO work_items
+       (id, kind, dedupe_key, payload, status, result, created_at, finished_at)
+       VALUES ('legacy', 'review', 'review:9', ?, 'done', ?, ?, ?)`,
+    ).run(
+      JSON.stringify({ kind: "review", prId: 9 }),
+      JSON.stringify({ reviewId: 17 }),
+      "2026-08-01T00:00:00.000Z",
+      "2026-08-01T01:00:00.000Z",
+    );
+
+    migrateDatabase(db);
+
+    expect(
+      db
+        .prepare("SELECT target_id, related_id, expires_at FROM work_items WHERE id = 'legacy'")
+        .get(),
+    ).toEqual({
+      target_id: 9,
+      related_id: 17,
+      expires_at: "2026-08-02T01:00:00.000Z",
+    });
+  });
+
   it("serializes simultaneous migrations from separate processes", async () => {
     const dir = await mkdtemp(join(tmpdir(), "reviewer-migration-"));
     const dbPath = join(dir, "reviewer.db");

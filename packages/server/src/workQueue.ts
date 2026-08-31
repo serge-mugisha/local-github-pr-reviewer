@@ -196,7 +196,10 @@ export function enqueueWork(payload: WorkPayload, options: EnqueueWorkOptions = 
       const serializedPayload = JSON.stringify(payload);
       if (options.idempotencyKey) {
         const existing = db
-          .prepare("SELECT id FROM work_items WHERE idempotency_key = ?")
+          .prepare(
+            `SELECT id FROM work_items
+             WHERE idempotency_key = ? AND status IN ('queued', 'running', 'done')`,
+          )
           .get(options.idempotencyKey) as { id: string } | undefined;
         if (existing) {
           return { workId: existing.id, created: false };

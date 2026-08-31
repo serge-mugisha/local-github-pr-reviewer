@@ -51,6 +51,15 @@ If the initial trigger response itself is lost, call `get_review_threads` once. 
 Worker leases are fenced and supervised. A stale worker cannot publish after recovery. Terminal
 errors include their cause and are never represented as a clean review.
 
+After correcting the cause of a terminal failure, repeat the original tool call once. Failed
+operations release their semantic key, so the retry creates a fresh durable operation.
+
+After correcting the cause of a terminal failure, repeat the original tool call once. Failed
+operations release their semantic key, so the retry creates a fresh durable operation.
+
+After correcting the cause of a terminal failure, repeat the original tool call once. Failed
+operations release their semantic key, so the retry creates a fresh durable operation.
+
 ## Guardrails
 
 - Do not search GitHub for Reviewer-local threads.

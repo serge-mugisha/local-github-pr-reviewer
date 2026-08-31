@@ -8,6 +8,7 @@ import {
   enqueueReplyWork,
   enqueueWork,
   ensureWorkItemRunning,
+  failWorkItem,
   findLatestWorkItem,
   getWorkItem,
   listWorkEvents,
@@ -191,17 +192,39 @@ describe("durable Reviewer work queue", () => {
     expect(mocks.spawn).toHaveBeenCalledTimes(2);
   });
 
+  it("releases an idempotency key after terminal failure", () => {
+    const first = enqueueWork(
+      { kind: "review", prId: 42 },
+      { idempotencyKey: "review:42:retryable" },
+    );
+    const claim = claimWorkItem(first.workId)!;
+    failWorkItem(first.workId, claim.workerToken, new Error("provider exploded"));
+
+    const retry = enqueueWork(
+      { kind: "review", prId: 42 },
+      { idempotencyKey: "review:42:retryable" },
+    );
+
+    expect(retry).toMatchObject({ created: true });
+    expect(retry.workId).not.toBe(first.workId);
+  });
+
   it("joins semantically identical reviews despite volatile PR metadata", () => {
+    const joinedBeforeCreate = vi.fn();
     const first = enqueueWork(
       { kind: "review", prId: 42, snapshot: reviewSnapshot("same-input", "old") },
       { idempotencyKey: "review:42:same-input" },
     );
-    const activeRetry = enqueueWork({
-      kind: "review",
-      prId: 42,
-      snapshot: reviewSnapshot("same-input", "new"),
-    });
+    const activeRetry = enqueueWork(
+      {
+        kind: "review",
+        prId: 42,
+        snapshot: reviewSnapshot("same-input", "new"),
+      },
+      { beforeCreate: joinedBeforeCreate },
+    );
     expect(activeRetry).toEqual({ workId: first.workId, created: false });
+    expect(joinedBeforeCreate).not.toHaveBeenCalled();
 
     const claim = claimWorkItem(first.workId)!;
     completeWorkItem(first.workId, claim.workerToken, { reviewId: 7 });
@@ -213,6 +236,7 @@ describe("durable Reviewer work queue", () => {
   });
 
   it("reports the PR when a different review is already active", () => {
+    const rejectedBeforeCreate = vi.fn();
     enqueueWork({
       kind: "review",
       prId: 42,
@@ -220,12 +244,16 @@ describe("durable Reviewer work queue", () => {
     });
 
     expect(() =>
-      enqueueWork({
-        kind: "review",
-        prId: 42,
-        snapshot: reviewSnapshot("different-input", "new"),
-      }),
+      enqueueWork(
+        {
+          kind: "review",
+          prId: 42,
+          snapshot: reviewSnapshot("different-input", "new"),
+        },
+        { beforeCreate: rejectedBeforeCreate },
+      ),
     ).toThrow("PR 42 already has another active Reviewer action");
+    expect(rejectedBeforeCreate).not.toHaveBeenCalled();
   });
 
   it("keeps status lookups read-only", () => {

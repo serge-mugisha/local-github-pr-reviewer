@@ -126,6 +126,35 @@ describe("durable operation snapshots", () => {
     expect(operationSnapshot(row).review?.gate).toBe("stale");
   });
 
+  it("recovers a pre-0.6 review relation from the terminal payload", () => {
+    mocks.db
+      .prepare(
+        `INSERT INTO reviews
+         (id, pr_id, head_sha, provider, status, summary, result, started_at,
+          heartbeat_at, finished_at, added_threads, stale_marked)
+         VALUES (11, 5, 'head', 'test', 'done', 'Legacy clean review', ?, ?, ?, ?, 0, 0)`,
+      )
+      .run(
+        JSON.stringify({ summary: "Legacy clean review", comments: [] }),
+        new Date().toISOString(),
+        new Date().toISOString(),
+        new Date().toISOString(),
+      );
+    insertWork("done", null);
+    mocks.db
+      .prepare("UPDATE work_items SET result = ? WHERE id = 'operation-1'")
+      .run(JSON.stringify({ reviewId: 11 }));
+    const row = mocks.db
+      .prepare("SELECT * FROM work_items WHERE id = 'operation-1'")
+      .get() as WorkItemRow;
+
+    expect(operationSnapshot(row).review).toMatchObject({
+      reviewId: 11,
+      gate: "clean",
+      summary: "Legacy clean review",
+    });
+  });
+
   it("versions thread actions by provider and live conversation context", () => {
     mocks.db
       .prepare(

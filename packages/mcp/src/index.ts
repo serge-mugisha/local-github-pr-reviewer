@@ -896,18 +896,26 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
           throw new McpError(ErrorCode.InvalidParams, `Preset ${presetId} not found`);
         }
         api.resolveReviewerProvider(repo, pr);
-        if (preset) {
-          api.setPrReviewConfig(prId, {
-            categories: preset.categories,
-            strictness: preset.strictness,
-            customRules: preset.customRules,
-          });
-        }
-        const snapshot = await api.createReviewExecutionSnapshot(repo, pr, expectedHeadSha);
+        const presetConfig = preset
+          ? {
+              categories: preset.categories,
+              strictness: preset.strictness,
+              customRules: preset.customRules,
+            }
+          : undefined;
+        const snapshot = await api.createReviewExecutionSnapshot(
+          repo,
+          pr,
+          expectedHeadSha,
+          presetConfig,
+        );
         const queued = api.enqueueWork(
           { kind: "review", prId, snapshot },
           {
             idempotencyKey: forceNew ? undefined : api.reviewIdempotencyKey(snapshot),
+            beforeCreate: presetConfig
+              ? () => api.setPrReviewConfig(prId, presetConfig)
+              : undefined,
           },
         );
         if (taskMode(request)) return { task: taskFromWork(api.getWorkItem(queued.workId)!) };
