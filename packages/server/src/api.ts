@@ -15,3 +15,4 @@ export * from "./config.js";
 export * from "./prWorktree.js";
 export * from "./workQueue.js";
 export * from "./timing.js";
+export * from "./operations.js";

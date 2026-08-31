@@ -67,6 +67,24 @@ async function waitForTask(client, taskId) {
   return task;
 }
 
+async function waitForLegacyOperation(client, operationId) {
+  for (let attempt = 0; attempt < 12; attempt++) {
+    const result = await client.request(
+      {
+        method: "tools/call",
+        params: {
+          name: "wait_operation",
+          arguments: { operationId, waitMs: 5_000 },
+        },
+      },
+      CallToolResultSchema,
+    );
+    const snapshot = result.structuredContent;
+    if (snapshot?.terminal) return { result, snapshot };
+  }
+  throw new Error(`Operation ${operationId} did not reach a terminal state.`);
+}
+
 try {
   await mkdir(repoPath);
   await mkdir(binPath);
@@ -151,8 +169,8 @@ setTimeout(() => process.stdout.write(JSON.stringify({result:JSON.stringify({sum
     )
     .run(repo.id, headSha, baseSha, timestamp);
 
-  const progress = [];
-  const legacy = await makeLegacyClient(env, (notification) => progress.push(notification.params));
+  const legacy = await makeLegacyClient(env, () => {});
+  const legacyStartedAt = Date.now();
   const legacyResult = await legacy.request(
     {
       method: "tools/call",
@@ -164,13 +182,33 @@ setTimeout(() => process.stdout.write(JSON.stringify({result:JSON.stringify({sum
     },
     CallToolResultSchema,
   );
-  await legacy.close();
-  const legacyText = legacyResult.content?.find((item) => item.type === "text")?.text ?? "";
-  if (!legacyText.includes("bridge-independent success")) {
-    throw new Error(`Legacy call returned the wrong result: ${JSON.stringify(legacyResult)}`);
+  if (Date.now() - legacyStartedAt > 1_000) {
+    throw new Error("Legacy trigger blocked instead of returning an operation handle.");
   }
-  if (!progress.some((item) => item.progressToken === "legacy-review")) {
-    throw new Error(`Legacy call did not emit progress: ${JSON.stringify(progress)}`);
+  const legacyOperationId = legacyResult.structuredContent?.operationId;
+  if (!legacyOperationId || legacyResult.structuredContent?.terminal) {
+    throw new Error(
+      `Legacy trigger did not return a running operation: ${JSON.stringify(legacyResult)}`,
+    );
+  }
+  const legacyTerminal = await waitForLegacyOperation(legacy, legacyOperationId);
+  const gate = await legacy.request(
+    {
+      method: "tools/call",
+      params: { name: "verify_review_gate", arguments: { operationId: legacyOperationId } },
+    },
+    CallToolResultSchema,
+  );
+  await legacy.close();
+  const legacyText =
+    legacyTerminal.result.content?.find((item) => item.type === "text")?.text ?? "";
+  if (
+    !legacyText.includes("bridge-independent success") ||
+    gate.structuredContent?.review?.gate !== "clean"
+  ) {
+    throw new Error(
+      `Legacy operation returned the wrong result: ${JSON.stringify(legacyTerminal)}`,
+    );
   }
   const legacyWork = api
     .getDb()
@@ -179,36 +217,46 @@ setTimeout(() => process.stdout.write(JSON.stringify({result:JSON.stringify({sum
   if (legacyWork?.status !== "done" || legacyWork.attempt_count !== 1) {
     throw new Error(`Legacy work was not completed exactly once: ${JSON.stringify(legacyWork)}`);
   }
-  process.stdout.write(`Legacy MCP call completed with durable progress: ${legacyWork.id}\n`);
+  process.stdout.write(
+    `Legacy MCP call returned immediately and completed via bounded wait: ${legacyWork.id}\n`,
+  );
 
   await writeFile(providerFailurePath, "fail\n");
   const failingLegacy = await makeLegacyClient(env, () => {});
   const failedResult = await failingLegacy.request(
     {
       method: "tools/call",
-      params: { name: "trigger_review", arguments: { prId: 1 } },
+      params: { name: "trigger_review", arguments: { prId: 1, forceNew: true } },
     },
     CallToolResultSchema,
   );
+  const failedOperationId = failedResult.structuredContent?.operationId;
+  if (!failedOperationId) throw new Error("Failed review did not return an operation handle.");
+  const failedTerminal = await waitForLegacyOperation(failingLegacy, failedOperationId);
   await failingLegacy.close();
   await rm(providerFailurePath);
-  if (!failedResult.isError) {
+  if (!failedTerminal.result.isError) {
     throw new Error(
-      `Legacy terminal failure was not a structured tool error: ${JSON.stringify(failedResult)}`,
+      `Legacy terminal failure was not a structured tool error: ${JSON.stringify(failedTerminal)}`,
     );
   }
-  const failureText = failedResult.content?.find((item) => item.type === "text")?.text ?? "";
+  const failureText =
+    failedTerminal.result.content?.find((item) => item.type === "text")?.text ?? "";
   if (!failureText.includes("intentional provider failure")) {
     throw new Error(`Legacy terminal failure lost its cause: ${JSON.stringify(failedResult)}`);
   }
-  process.stdout.write("Legacy MCP call returned a structured terminal failure\n");
+  process.stdout.write("Legacy bounded wait returned a structured terminal failure\n");
 
   const first = await makeClient(env);
   const startedAt = Date.now();
   const created = await first.request(
     {
       method: "tools/call",
-      params: { name: "trigger_review", arguments: { prId: 1 }, task: { ttl: 60_000 } },
+      params: {
+        name: "trigger_review",
+        arguments: { prId: 1, forceNew: true },
+        task: { ttl: 60_000 },
+      },
     },
     CreateTaskResultSchema,
   );
@@ -240,7 +288,11 @@ setTimeout(() => process.stdout.write(JSON.stringify({result:JSON.stringify({sum
   const crashed = await crashClient.request(
     {
       method: "tools/call",
-      params: { name: "trigger_review", arguments: { prId: 1 }, task: { ttl: 60_000 } },
+      params: {
+        name: "trigger_review",
+        arguments: { prId: 1, forceNew: true },
+        task: { ttl: 60_000 },
+      },
     },
     CreateTaskResultSchema,
   );

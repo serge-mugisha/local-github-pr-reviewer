@@ -150,7 +150,7 @@ via `spawn`/`exec`. See [SECURITY.md](SECURITY.md) for details.
 
 ## MCP Server for AI Agents
 
-The tool includes a Model Context Protocol (MCP) server that exposes all PR reviewing, configuration, and conversational features to external AI agents (like Claude Desktop or Antigravity). This allows an AI agent to read PR diffs, set review rules, trigger reviews, and reply to threads directly from its own environment without using the web UI. Long-running review, reply, and revalidation calls use native MCP Tasks when the host supports them and progress-kept legacy calls otherwise. Both modes are backed by SQLite and detached Reviewer workers, so provider execution survives client timeouts and MCP bridge replacement without agent-authored polling or restart scripts.
+The tool includes a Model Context Protocol (MCP) server that exposes all PR reviewing, configuration, and conversational features to external AI agents (like Claude Desktop or Antigravity). This allows an AI agent to read PR diffs, set review rules, trigger reviews, and reply to threads directly from its own environment without using the web UI. Long-running review, reply, and revalidation calls use native MCP Tasks when the host supports them. Other hosts receive a durable operation handle immediately and use the bounded `wait_operation` tool, which returns either the terminal result or a healthy running snapshot. Both modes are backed by SQLite, immutable exact-head snapshots, and detached supervised workers.
 
 Reviewer validates the provider's structured review before publishing anything. If output is malformed, it retries the provider once; a second invalid response produces an explicit terminal error and no review or thread state is published. A completed zero-thread result is therefore a validated clean review; MCP consumers do not need to inspect raw provider output or the database.
 
@@ -170,15 +170,11 @@ cache-only reads, and an optional result limit are supported.
   "mcpServers": {
     "local-github-pr-reviewer": {
       "command": "node",
-      "args": ["/absolute/path/to/local-github-pr-reviewer/packages/mcp/dist/index.js"],
-      "timeout": 2400000
+      "args": ["/absolute/path/to/local-github-pr-reviewer/packages/mcp/dist/index.js"]
     }
   }
 }
 ```
-
-Claude's `timeout` is a hard per-tool wall-clock limit in milliseconds; progress notifications do
-not extend it. Forty minutes covers Reviewer's bounded provider retry and worker lifecycle.
 
 **For Codex** (`~/.codex/config.toml`):
 
@@ -186,16 +182,18 @@ not extend it. Forty minutes covers Reviewer's bounded provider retry and worker
 [mcp_servers.local-github-pr-reviewer]
 command = "node"
 args = ["/absolute/path/to/local-github-pr-reviewer/packages/mcp/dist/index.js"]
-tool_timeout_sec = 2400
 ```
 
-Some embedded hosts impose their own non-configurable request cap. If a host reports a transport
-timeout, the detached work continues. Inspect `get_review_threads` once: use the committed result
-if the expected head completed, or retry `trigger_review` once with identical arguments only when
-the review is still running or no review was enqueued. For a timed-out reply or revalidation,
-inspect `get_thread_action` once and verify its type and `startedAt` match the attempted call before
-using it. An older action is not the timed-out call; retry the identical operation once to join work
-that may still be queued. Do not create a polling loop.
+No extended MCP timeout is required. `trigger_review`, `reply_to_thread`, and
+`revalidate_thread` return an `operationId` immediately on ordinary clients. Call
+`wait_operation` with that ID; each call waits at most 25 seconds and is safe to repeat while
+`terminal` is false. `verify_review_gate` refreshes GitHub and confirms the completed review still
+matches the current PR head.
+
+Terminal failures release their semantic idempotency key. After correcting the reported cause,
+repeat the original tool call once to create a fresh operation. Use `forceNew` only to intentionally
+start another pass for a genuinely unchanged snapshot, such as re-running a clean review at the
+same head. Reply callers can use it to intentionally repeat an otherwise identical message.
 
 **For Antigravity** (`.gemini/config/config.json`):
 

@@ -16,7 +16,6 @@ import { resolveJobStatus } from "./jobStatus.js";
 import { collectViewerPrs } from "./prDiscovery.js";
 import { handleAwaitReview } from "./awaitReview.js";
 import { handleAwaitThreadAction } from "./awaitThreadAction.js";
-import { createDurableProgressReporter } from "./progress.js";
 import { resolveThreadActionStatus, selectThreadAction } from "./threadActionStatus.js";
 
 const TASK_TTL_MS = 24 * 60 * 60 * 1_000;
@@ -53,71 +52,65 @@ function taskMode(request: { params: unknown }): boolean {
 }
 
 function completedWorkResult(work: api.WorkItemRow): CallToolResult {
-  if (work.status !== "done") {
-    return {
-      content: [{ type: "text", text: work.error ?? `Reviewer task ${work.id} failed.` }],
-      isError: true,
-    };
-  }
-  const result = JSON.parse(work.result ?? "null") as { reviewId?: number } | null;
-  if (work.kind === "review" && result?.reviewId) {
-    const review = resolveJobStatus(
-      { reviewId: result.reviewId },
-      {
-        getJob: () => undefined,
-        getReview: api.getReview,
-        getThreads: api.listThreadsForPR,
-        reconcileInterruptedReviews: api.reconcileInterruptedReviews,
-      },
-    );
-    return {
-      content: [{ type: "text", text: JSON.stringify({ ...review, taskId: work.id }, null, 2) }],
-    };
-  }
+  const snapshot = api.operationSnapshot(work);
+  return structuredResult(snapshot, work.status === "error" || work.status === "cancelled");
+}
+
+function structuredResult(value: object, isError = false): CallToolResult {
   return {
-    content: [{ type: "text", text: JSON.stringify({ taskId: work.id, result }, null, 2) }],
+    content: [{ type: "text", text: JSON.stringify(value, null, 2) }],
+    structuredContent: value as Record<string, unknown>,
+    ...(isError ? { isError: true } : {}),
   };
 }
 
-async function waitForLegacyWork(
-  workId: string,
-  label: string,
-  request: { params: { _meta?: { progressToken?: string | number } } },
-  extra: {
-    signal: AbortSignal;
-    sendNotification(params: {
-      method: "notifications/progress";
-      params: { progressToken: string | number; progress: number; message: string };
-    }): Promise<void>;
+const OPERATION_OUTPUT_SCHEMA = {
+  type: "object",
+  properties: {
+    operationId: { type: "string" },
+    kind: { type: "string", enum: ["review", "reply", "revalidate"] },
+    status: {
+      type: "string",
+      enum: ["queued", "running", "completed", "failed", "cancelled"],
+    },
+    terminal: { type: "boolean" },
+    phase: { type: "string" },
+    created: { type: "boolean" },
+    target: { type: "object" },
+    headSha: { type: ["string", "null"] },
+    statusMessage: { type: "string" },
+    error: { type: "string" },
+    result: {},
+    review: {
+      type: "object",
+      properties: {
+        reviewId: { type: "number" },
+        reviewedHeadSha: { type: ["string", "null"] },
+        currentHeadSha: { type: ["string", "null"] },
+        gate: { type: "string", enum: ["pending", "clean", "findings", "stale", "failed"] },
+        summary: { type: ["string", "null"] },
+        findings: { type: "array" },
+        openActionableThreads: { type: "array" },
+      },
+    },
   },
-): Promise<CallToolResult> {
-  try {
-    await api.waitForWorkItem(workId, {
-      signal: extra.signal,
-      timeoutMs: null,
-      onProgress: createDurableProgressReporter(
-        {
-          signal: extra.signal,
-          progressToken: request.params._meta?.progressToken,
-          sendProgress: (params) =>
-            extra.sendNotification({ method: "notifications/progress", params }),
-        },
-        label,
-      ),
-    });
-  } catch (error) {
-    const current = api.getWorkItem(workId);
-    if (!current || (current.status !== "error" && current.status !== "cancelled")) throw error;
-  }
-  const work = api.getWorkItem(workId);
-  if (!work) throw new McpError(ErrorCode.InvalidParams, "Reviewer task not found.");
-  return completedWorkResult(work);
-}
+  required: [
+    "operationId",
+    "kind",
+    "status",
+    "terminal",
+    "phase",
+    "created",
+    "target",
+    "headSha",
+    "statusMessage",
+  ],
+} as const;
 
 const server = new Server(
   {
     name: "reviewer-mcp",
-    version: "0.5.3",
+    version: "0.6.0",
   },
   {
     capabilities: {
@@ -125,7 +118,7 @@ const server = new Server(
       tasks: { requests: { tools: { call: {} } } },
     },
     instructions:
-      "All review state and threads are local, not GitHub comments. trigger_review, reply_to_thread, and revalidate_thread are durable operations: call each once and let that call deliver its terminal result. Task-capable hosts receive an MCP Task; legacy hosts receive a progress-kept call backed by the same detached work item. Reviewer validates provider output and retries malformed output once; completed zero-thread reviews are validated, so never inspect raw provider logs or the database to confirm them. If the host itself returns a transport timeout, inspect get_review_threads once: use a completed result for the expected head, or retry trigger_review once with identical arguments only when the review is running or was not enqueued. Never loop. Before reply or revalidation, retain its type and call start time. After a timeout, inspect get_thread_action once and accept it only when type and startedAt match this call; retry the identical action once when matching and active or when no matching action was claimed. Never poll, create timers/watchers, restart Reviewer, or duplicate active work. Treat AI findings as advisory; patch, dismiss, revalidate, or resolve each thread deliberately before a new full review.",
+      "All review state and threads are local, not GitHub comments. Long-running tools return a durable operation immediately on ordinary clients and a protocol-native MCP Task on Task-capable clients. For an ordinary operation, call wait_operation with the returned operationId; each bounded wait either returns the terminal result or a healthy running snapshot and is safe to repeat without timers or trigger retries. Reviewer snapshots the exact PR head, provider, configuration, and prior thread context before enqueue, validates provider output, and fails closed. Use verify_review_gate before accepting a completed review. Treat AI findings as advisory and deliberately patch, dismiss, revalidate, or resolve each open non-stale thread.",
   },
 );
 
@@ -268,7 +261,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       {
         name: "get_review_threads",
         description:
-          "Returns the latest persisted review status and all locally stored threads immediately, without refreshing GitHub or fetching the diff.",
+          "Returns the latest persisted review, latest correlated operation, and live local threads immediately.",
         inputSchema: {
           type: "object",
           properties: { prId: { type: "number" } },
@@ -347,8 +340,9 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       {
         name: "trigger_review",
         description:
-          "Runs one durable local AI review. Task-capable hosts receive an MCP Task; legacy hosts keep this call open with progress until the detached worker commits a strictly validated summary and local threads. Malformed provider output is retried once and otherwise returns an explicit error, never a false clean review. Call once and use its terminal result; do not inspect raw provider logs or the database. After a host transport timeout, inspect get_review_threads once: use a completed result for the expected head, or retry once with identical arguments only when the review is running or was not enqueued. Never loop, poll, or call await_review.",
+          "Snapshots and queues one exact-head local AI review. Ordinary clients receive a durable operation immediately; call wait_operation with its operationId. Task-capable clients receive an MCP Task.",
         execution: { taskSupport: "optional" },
+        outputSchema: OPERATION_OUTPUT_SCHEMA,
         inputSchema: {
           type: "object",
           properties: {
@@ -357,20 +351,70 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               type: "number",
               description: "Optional preset to apply before starting a new review",
             },
+            expectedHeadSha: {
+              type: "string",
+              description:
+                "Optional exact PR head expected by the caller; enqueue fails if it moved",
+            },
+            forceNew: {
+              type: "boolean",
+              description: "Start a new pass even when an identical completed operation exists",
+            },
           },
           required: ["prId"],
         },
       },
       {
+        name: "get_operation",
+        description:
+          "Returns one durable Reviewer operation immediately and safely recovers its worker.",
+        outputSchema: OPERATION_OUTPUT_SCHEMA,
+        inputSchema: {
+          type: "object",
+          properties: { operationId: { type: "string" } },
+          required: ["operationId"],
+        },
+      },
+      {
+        name: "wait_operation",
+        description:
+          "Waits up to 25 seconds for a durable operation. A wait expiry returns a healthy running snapshot, never a timeout error; repeat while terminal is false.",
+        outputSchema: OPERATION_OUTPUT_SCHEMA,
+        inputSchema: {
+          type: "object",
+          properties: {
+            operationId: { type: "string" },
+            waitMs: { type: "number", minimum: 0, maximum: api.MAX_OPERATION_WAIT_MS },
+          },
+          required: ["operationId"],
+        },
+      },
+      {
+        name: "verify_review_gate",
+        description:
+          "Refreshes GitHub and returns the canonical exact-head gate for a completed review operation.",
+        outputSchema: OPERATION_OUTPUT_SCHEMA,
+        inputSchema: {
+          type: "object",
+          properties: { operationId: { type: "string" } },
+          required: ["operationId"],
+        },
+      },
+      {
         name: "reply_to_thread",
         description:
-          "Runs a durable local AI reply. Task-capable hosts receive an MCP Task; legacy hosts keep this call open with progress until completion. Nothing is posted to GitHub. Retain the call start time; after a host timeout, inspect get_thread_action once and accept only a reply whose startedAt is not older than this call before deciding whether one identical retry is needed.",
+          "Queues a durable local AI reply and immediately returns its operation. Identical completed replies are deduplicated; set forceNew only to intentionally repeat one. Nothing is posted to GitHub.",
         execution: { taskSupport: "optional" },
+        outputSchema: OPERATION_OUTPUT_SCHEMA,
         inputSchema: {
           type: "object",
           properties: {
             threadId: { type: "number" },
             message: { type: "string" },
+            forceNew: {
+              type: "boolean",
+              description: "Intentionally repeat an otherwise identical completed reply",
+            },
           },
           required: ["threadId", "message"],
         },
@@ -378,12 +422,17 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       {
         name: "revalidate_thread",
         description:
-          "Runs a durable local AI revalidation. Task-capable hosts receive an MCP Task; legacy hosts keep this call open with progress until completion. Retain the call start time; after a host timeout, inspect get_thread_action once and accept only a revalidation whose startedAt is not older than this call before deciding whether one identical retry is needed.",
+          "Queues a durable exact-head AI revalidation and immediately returns its operation.",
         execution: { taskSupport: "optional" },
+        outputSchema: OPERATION_OUTPUT_SCHEMA,
         inputSchema: {
           type: "object",
           properties: {
             threadId: { type: "number" },
+            forceNew: {
+              type: "boolean",
+              description: "Start a new pass even when an identical completed operation exists",
+            },
           },
           required: ["threadId"],
         },
@@ -642,6 +691,23 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
         const pr = requirePr(prId);
         api.reconcileInterruptedReviews();
         const review = api.getLatestReviewForPR(prId);
+        const latestOperation = api.getLatestOperation("review", prId);
+        const compactOperation = latestOperation
+          ? {
+              ...latestOperation,
+              ...(latestOperation.review
+                ? {
+                    review: {
+                      reviewId: latestOperation.review.reviewId,
+                      reviewedHeadSha: latestOperation.review.reviewedHeadSha,
+                      currentHeadSha: latestOperation.review.currentHeadSha,
+                      gate: latestOperation.review.gate,
+                      summary: latestOperation.review.summary,
+                    },
+                  }
+                : {}),
+            }
+          : undefined;
         return {
           content: [
             {
@@ -650,6 +716,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
                 {
                   pr,
                   review,
+                  latestOperation: compactOperation,
                   threads: api.listThreadsForPR(prId),
                 },
                 null,
@@ -780,6 +847,44 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
         );
         return { content: [{ type: "text", text: JSON.stringify(resolved, null, 2) }] };
       }
+      case "get_operation": {
+        const { operationId } = z
+          .object({ operationId: z.string().uuid() })
+          .parse(request.params.arguments);
+        const snapshot = api.getOperation(operationId);
+        return structuredResult(
+          snapshot,
+          snapshot.status === "failed" || snapshot.status === "cancelled",
+        );
+      }
+      case "wait_operation": {
+        const { operationId, waitMs } = z
+          .object({
+            operationId: z.string().uuid(),
+            waitMs: z
+              .number()
+              .int()
+              .min(0)
+              .max(api.MAX_OPERATION_WAIT_MS)
+              .default(api.OPERATION_POLL_INTERVAL_MS),
+          })
+          .parse(request.params.arguments);
+        const snapshot = await api.waitOperation(operationId, waitMs, extra.signal);
+        return structuredResult(
+          snapshot,
+          snapshot.status === "failed" || snapshot.status === "cancelled",
+        );
+      }
+      case "verify_review_gate": {
+        const { operationId } = z
+          .object({ operationId: z.string().uuid() })
+          .parse(request.params.arguments);
+        const snapshot = await api.verifyReviewGate(operationId);
+        return structuredResult(
+          snapshot,
+          snapshot.status === "failed" || snapshot.status === "cancelled",
+        );
+      }
       case "await_review": {
         const { reviewId, timeoutMs } = z
           .object({
@@ -810,8 +915,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
         return { content: [{ type: "text", text: JSON.stringify(resolved, null, 2) }] };
       }
       case "trigger_review": {
-        const { prId, presetId } = z
-          .object({ prId: z.number(), presetId: z.number().int().positive().optional() })
+        const { prId, presetId, expectedHeadSha, forceNew } = z
+          .object({
+            prId: z.number(),
+            presetId: z.number().int().positive().optional(),
+            expectedHeadSha: z
+              .string()
+              .regex(/^[0-9a-f]{40}$/)
+              .optional(),
+            forceNew: z.boolean().default(false),
+          })
           .parse(request.params.arguments);
         const pr = requirePr(prId);
         const repo = requireRepo(pr.repo_id);
@@ -823,47 +936,99 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
           throw new McpError(ErrorCode.InvalidParams, `Preset ${presetId} not found`);
         }
         api.resolveReviewerProvider(repo, pr);
+        const presetConfig = preset
+          ? {
+              categories: preset.categories,
+              strictness: preset.strictness,
+              customRules: preset.customRules,
+            }
+          : undefined;
+        const snapshot = await api.createReviewExecutionSnapshot(
+          repo,
+          pr,
+          expectedHeadSha,
+          presetConfig,
+        );
         const queued = api.enqueueWork(
-          { kind: "review", prId },
+          { kind: "review", prId, snapshot },
           {
-            beforeCreate: preset
-              ? () =>
-                  api.setPrReviewConfig(prId, {
-                    categories: preset.categories,
-                    strictness: preset.strictness,
-                    customRules: preset.customRules,
-                  })
+            idempotencyKey: forceNew ? undefined : api.reviewIdempotencyKey(snapshot),
+            beforeCreate: presetConfig
+              ? () => api.setPrReviewConfig(prId, presetConfig)
               : undefined,
           },
         );
-        if (taskMode(request)) return { task: taskFromWork(api.getWorkItem(queued.workId)!) };
-        return waitForLegacyWork(queued.workId, "Review", request, extra);
+        const work = api.getWorkItem(queued.workId)!;
+        if (taskMode(request)) return { task: taskFromWork(work) };
+        return structuredResult(
+          api.operationSnapshot(work, queued.created),
+          work.status === "error" || work.status === "cancelled",
+        );
       }
       case "reply_to_thread": {
-        const { threadId, message } = z
-          .object({ threadId: z.number(), message: z.string().min(1) })
+        const { threadId, message, forceNew } = z
+          .object({
+            threadId: z.number(),
+            message: z.string().min(1),
+            forceNew: z.boolean().default(false),
+          })
           .parse(request.params.arguments);
         const row = api.getDb().prepare("SELECT pr_id FROM threads WHERE id = ?").get(threadId) as
           | { pr_id: number }
           | undefined;
         if (!row) throw new McpError(ErrorCode.InvalidParams, "Thread not found");
         const pr = requirePr(row.pr_id);
-        api.resolveReviewerProvider(requireRepo(pr.repo_id), pr);
-        const queued = api.enqueueReplyWork(threadId, message, pr.head_sha);
-        if (taskMode(request)) return { task: taskFromWork(api.getWorkItem(queued.workId)!) };
-        return waitForLegacyWork(queued.workId, "Thread reply", request, extra);
+        const repo = requireRepo(pr.repo_id);
+        const refreshed = await api.hydratePR(repo, pr.number);
+        const providerId = api.resolveReviewerProvider(repo, refreshed).provider;
+        const queued = api.enqueueReplyWork(threadId, message, refreshed.head_sha, {
+          providerId,
+          idempotencyKey: forceNew
+            ? undefined
+            : api.threadActionIdempotencyKey("reply", threadId, {
+                headSha: refreshed.head_sha,
+                providerId,
+                message,
+              }),
+        });
+        const work = api.getWorkItem(queued.workId)!;
+        if (taskMode(request)) return { task: taskFromWork(work) };
+        return structuredResult(
+          api.operationSnapshot(work, queued.created),
+          work.status === "error" || work.status === "cancelled",
+        );
       }
       case "revalidate_thread": {
-        const { threadId } = z.object({ threadId: z.number() }).parse(request.params.arguments);
+        const { threadId, forceNew } = z
+          .object({ threadId: z.number(), forceNew: z.boolean().default(false) })
+          .parse(request.params.arguments);
         const row = api.getDb().prepare("SELECT pr_id FROM threads WHERE id = ?").get(threadId) as
           | { pr_id: number }
           | undefined;
         if (!row) throw new McpError(ErrorCode.InvalidParams, "Thread not found");
         const pr = requirePr(row.pr_id);
-        api.resolveReviewerProvider(requireRepo(pr.repo_id), pr);
-        const queued = api.enqueueWork({ kind: "revalidate", threadId });
-        if (taskMode(request)) return { task: taskFromWork(api.getWorkItem(queued.workId)!) };
-        return waitForLegacyWork(queued.workId, "Thread revalidation", request, extra);
+        const repo = requireRepo(pr.repo_id);
+        const refreshed = await api.hydratePR(repo, pr.number);
+        const providerId = api.resolveReviewerProvider(repo, refreshed).provider;
+        const contextVersion = api.getThreadActionContextVersion(threadId);
+        const queued = api.enqueueWork(
+          { kind: "revalidate", threadId, headSha: refreshed.head_sha, providerId },
+          {
+            idempotencyKey: forceNew
+              ? undefined
+              : api.threadActionIdempotencyKey("revalidate", threadId, {
+                  headSha: refreshed.head_sha,
+                  providerId,
+                  contextVersion,
+                }),
+          },
+        );
+        const work = api.getWorkItem(queued.workId)!;
+        if (taskMode(request)) return { task: taskFromWork(work) };
+        return structuredResult(
+          api.operationSnapshot(work, queued.created),
+          work.status === "error" || work.status === "cancelled",
+        );
       }
       case "get_thread_action": {
         const { actionId, threadId } = z
