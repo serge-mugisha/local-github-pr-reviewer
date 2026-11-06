@@ -35,10 +35,7 @@ async function exists(path: string): Promise<boolean> {
   }
 }
 
-/**
- * Xcode keys DerivedData by workspace path, so a build inside a Reviewer worktree outlives it by
- * several GB. Deletes only folders whose recorded workspace was under `worktreesRoot` and is gone.
- */
+/** Deletes only folders whose recorded workspace was under `worktreesRoot` and no longer exists. */
 export async function removeOrphanedDerivedData(
   worktreesRoot: string,
   derivedDataDir = XCODE_DERIVED_DATA_DIR,
