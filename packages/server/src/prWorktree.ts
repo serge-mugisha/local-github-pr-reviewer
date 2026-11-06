@@ -6,6 +6,7 @@ import type { RepoRow, PrRow } from "./db.js";
 import type { ProviderProgress } from "./providers/types.js";
 import { spawnCli } from "./providers/spawn.js";
 import { DURABLE_WAIT_TIMEOUT_MS } from "./timing.js";
+import { removeOrphanedDerivedData } from "./xcodeDerivedData.js";
 
 export interface PrWorktree {
   cwd: string;
@@ -36,6 +37,14 @@ async function runGit(
   return result.stdout.trim();
 }
 
+async function removeWorktreeDerivedData(): Promise<void> {
+  try {
+    await removeOrphanedDerivedData(resolve(dataDir(), "worktrees"));
+  } catch (error) {
+    console.error(`Reviewer DerivedData cleanup failed: ${String(error)}`);
+  }
+}
+
 export async function pruneWorktrees(repos: RepoRow[]): Promise<void> {
   // Prune git metadata in all repos
   await Promise.all(
@@ -54,6 +63,7 @@ export async function pruneWorktrees(repos: RepoRow[]): Promise<void> {
   } catch {
     // ignore
   }
+  await removeWorktreeDerivedData();
 }
 
 /**
@@ -124,6 +134,7 @@ export async function pruneStaleWorktrees(
     }
   }
 
+  await removeWorktreeDerivedData();
   return removed;
 }
 
@@ -208,6 +219,7 @@ export async function preparePrHeadWorktree(args: {
       } catch (e) {
         console.error(`Reviewer action-ref cleanup failed: ${(e as Error).message}`);
       }
+      await removeWorktreeDerivedData();
     },
   };
 }

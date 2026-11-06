@@ -6,6 +6,7 @@ import {
   STALE_WORKTREE_AFTER_MS,
 } from "./prWorktree.js";
 import { DURABLE_WAIT_TIMEOUT_MS } from "./timing.js";
+import { removeOrphanedDerivedData } from "./xcodeDerivedData.js";
 import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { readdir, rm, stat } from "node:fs/promises";
@@ -24,6 +25,10 @@ vi.mock("./config.js", () => ({
   dataDir: () => "/data",
 }));
 
+vi.mock("./xcodeDerivedData.js", () => ({
+  removeOrphanedDerivedData: vi.fn(),
+}));
+
 describe("preparePrHeadWorktree", () => {
   let mockSpawn: any;
 
@@ -33,6 +38,7 @@ describe("preparePrHeadWorktree", () => {
     vi.mocked(readdir).mockReset().mockRejectedValue(new Error("enoent"));
     vi.mocked(stat).mockReset().mockRejectedValue(new Error("enoent"));
     vi.mocked(rm).mockReset();
+    vi.mocked(removeOrphanedDerivedData).mockReset().mockResolvedValue(0);
   });
 
   afterEach(() => {
@@ -105,12 +111,14 @@ describe("preparePrHeadWorktree", () => {
       expect.any(Object),
     );
 
+    expect(removeOrphanedDerivedData).not.toHaveBeenCalled();
     await wt.cleanup();
     expect(mockSpawn).toHaveBeenCalledWith(
       "git",
       ["worktree", "remove", "--force", wt.cwd],
       expect.any(Object),
     );
+    expect(removeOrphanedDerivedData).toHaveBeenCalledWith("/data/worktrees");
     expect(mockSpawn).toHaveBeenCalledWith(
       "git",
       [
@@ -226,6 +234,22 @@ describe("preparePrHeadWorktree", () => {
       expect.objectContaining({ cwd: "/local2" }),
     );
     expect(rm).toHaveBeenCalledWith("/data/worktrees", expect.any(Object));
+    expect(removeOrphanedDerivedData).toHaveBeenCalledWith("/data/worktrees");
+  });
+
+  it("finishes cleanup when the DerivedData sweep fails", async () => {
+    setupGitMock({ "rev-parse ref": "test_sha" });
+    vi.mocked(removeOrphanedDerivedData).mockRejectedValue(new Error("EPERM"));
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const wt = await preparePrHeadWorktree({
+      repo: { id: 1, owner: "o", name: "n", local_path: "/local" } as any,
+      pr: { number: 42, head_sha: "test_sha" },
+    });
+
+    await expect(wt.cleanup()).resolves.toBeUndefined();
+
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("DerivedData cleanup failed"));
+    errorSpy.mockRestore();
   });
 
   it("prunes only stale Reviewer worktrees", async () => {
@@ -251,6 +275,7 @@ describe("preparePrHeadWorktree", () => {
       ["worktree", "remove", "--force", "/data/worktrees/repo-1/active-review"],
       expect.any(Object),
     );
+    expect(removeOrphanedDerivedData).toHaveBeenCalledWith("/data/worktrees");
   });
 
   it("sweeps only action refs older than the lifecycle safety window", async () => {
